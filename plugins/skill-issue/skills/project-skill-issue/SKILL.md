@@ -1,6 +1,6 @@
 ---
 name: project-skill-issue
-description: Audit the current project's Claude Code configuration and setup quality. Evaluates CLAUDE.md files, .claude/ directory, CI/CD integration, documentation, and overall Claude-readiness. Safe to run on its own or as part of /skill-issue:skill-issue.
+description: Audit the current project's Claude Code configuration and readiness. Evaluates CLAUDE.md files, .claude/ directory, CI/CD integration, agent team readiness, and production posture — calibrated to the project's actual type and stakes. Safe to run on its own or as part of /skill-issue:skill-issue.
 context: fork
 agent: Explore
 disable-model-invocation: true
@@ -10,259 +10,413 @@ allowed-tools: Read, Glob, Grep, Bash
 # Project Skill Issue — Configuration Audit
 
 You are performing a comprehensive audit of this project's Claude Code setup.
-Your job is to evaluate how well the project is configured to let Claude work at
-maximum effectiveness, then produce a prioritised improvement report.
+The quality bar must be calibrated to the project type — do not apply production standards
+to a PoC, and do not apply PoC standards to a production system.
 
-Work through each section systematically. Collect evidence before scoring anything.
+Start by classifying the project. Then audit. Then score.
 
 ---
 
-## Section 1: CLAUDE.md Files (Project Memory)
+## Step 1 — Classify the project
+
+Before auditing anything, determine what kind of project this is.
 
 ```bash
-find . -name "CLAUDE.md" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/vendor/*" 2>/dev/null
+# Gather signals
+ls -1
+cat README.md 2>/dev/null | head -40
+cat CLAUDE.md 2>/dev/null | head -30
+cat package.json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('name',''),d.get('description',''))" 2>/dev/null
+cat pyproject.toml 2>/dev/null | head -20
 ```
 
-**For each CLAUDE.md found, read it and evaluate:**
+Also check for:
+```bash
+# Production signals: docker, kubernetes, CI/CD, monitoring, auth
+ls Dockerfile docker-compose.yml kubernetes/ k8s/ .github/workflows/ 2>/dev/null
+# Regulated signals: HIPAA, GDPR, SOC2, PCI mentions
+grep -r -i "hipaa\|gdpr\|soc2\|pci\|compliance\|audit\|regulatory" README.md docs/ 2>/dev/null | head -5
+```
 
-| Quality Signal | Present? | Notes |
+Classify as one of:
+
+| Type | Description | Quality bar |
 |---|---|---|
-| Project purpose / overview | | |
-| Tech stack & key dependencies | | |
-| Coding conventions & style | | |
-| Key commands (build/test/lint/deploy) | | |
-| Architecture / non-obvious decisions | | |
-| Anti-patterns / what NOT to do | | |
-| Subdirectory-specific CLAUDE.md files | | |
-| Length appropriate (< 500 lines) | | |
-| Up to date (references match current code) | | |
+| **PoC / Experiment** | Exploring an idea; not going to production; no users except the creator | Minimal — just needs to work |
+| **Internal Tool** | Used by a team; low external exposure; some reliability requirement | Moderate — reliable, some docs, basic security |
+| **Production Application** | External users; reliability matters; downtime has business impact | High — tests, error handling, monitoring, security, accessibility |
+| **Regulated / High-Stakes** | Financial, healthcare, legal, govt; compliance requirements; audit trails; significant harm if things go wrong | Very high — formal controls, compliance docs, security testing, audit logging |
+| **Safety-Critical** | Failure causes physical harm, data loss, financial catastrophe | Exceptional — formal verification, redundancy, incident response |
+| **Plugin / Library / SDK** | Consumed by other developers; API stability matters; versioning is important | High — docs, semver, migration guides, compatibility testing |
 
-**If no CLAUDE.md exists at the project root** — this is the single highest-impact gap.
-Note it clearly in the report.
-
-**Sub-directory CLAUDE.md files** are a mark of mature setup. Check key directories:
-```bash
-find . -mindepth 2 -maxdepth 5 -name "CLAUDE.md" -not -path "*/node_modules/*" 2>/dev/null
-```
+State the classification clearly at the top of your report. All scoring thresholds in this
+skill adjust based on this classification.
 
 ---
 
-## Section 2: `.claude/` Directory
+## Step 2 — Audit CLAUDE.md files (Project Memory)
+
+```bash
+# Find all CLAUDE.md files
+find . -name "CLAUDE.md" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/vendor/*" -not -path "*/dist/*" 2>/dev/null | sort
+
+# Read each one
+```
+
+For each CLAUDE.md found, evaluate against this checklist:
+
+| Signal | Present? | Quality (brief note) |
+|---|---|---|
+| Project purpose and business context | | |
+| Tech stack, key dependencies, version constraints | | |
+| Key commands (build, test, lint, typecheck, deploy, rollback) | | |
+| Coding conventions and style | | |
+| Architecture decisions and their rationale | | |
+| Anti-patterns and off-limits areas | | |
+| How to run the project locally | | |
+| How to run tests (unit, integration, e2e separately if applicable) | | |
+| Non-obvious gotchas that would trip up Claude | | |
+| Domain-specific knowledge Claude wouldn't know | | |
+| What NOT to change / protected areas | | |
+| Agent team operating instructions (if agents are used) | | |
+
+**Subdirectory CLAUDE.md coverage:**
+```bash
+find . -mindepth 2 -maxdepth 6 -name "CLAUDE.md" -not -path "*/node_modules/*" 2>/dev/null
+```
+
+High-maturity projects have CLAUDE.md files in key subdirectories (packages/, services/, apps/,
+backend/, frontend/) to give agents context-specific instruction without bloating the root file.
+
+**Length check:** CLAUDE.md files > 600 lines are usually bloated and counter-productive.
+Files < 100 lines for a non-trivial project are likely too thin.
+
+**Autonomous agent readiness check:** Could an agent team work in this project for 10+ turns
+without hitting a decision point that requires the CLAUDE.md to answer? If not, what's missing?
+
+---
+
+## Step 3 — Audit `.claude/` Directory
 
 ```bash
 find .claude -type f 2>/dev/null | sort
-ls -la .claude/ 2>/dev/null
-```
-
-### settings.json
-```bash
-cat .claude/settings.json 2>/dev/null
-```
-
-Evaluate:
-- Is a preferred model configured?
-- Are permissions appropriately scoped?
-- Are hooks defined (PostToolUse, PreToolUse)?
-- Is there a `cleanupPeriodDays` setting?
-
-### Skills / Commands
-```bash
+cat .claude/settings.json 2>/dev/null || echo "(no .claude/settings.json)"
 find .claude/skills .claude/commands -type f 2>/dev/null | sort
-```
-
-For each skill/command found, read its SKILL.md or .md file and check:
-- Does it have a clear description?
-- Is the scope appropriate?
-- Is it covering a real project workflow?
-
-**Key workflows that SHOULD have skills in most projects:**
-- `/commit` or `/changelog` — standardised commit message creation
-- `/review` or `/pr-review` — code review checklist
-- `/test` — run tests and interpret failures
-- `/deploy` — deployment workflow
-- `/debug` — structured debugging approach
-
-### Agents
-```bash
 find .claude/agents -type f 2>/dev/null | sort
 ```
 
-For each agent, read and evaluate:
-- Is the description precise enough for Claude to know when to use it?
-- Are tool restrictions appropriate?
-- Is the system prompt focused and actionable?
+### settings.json evaluation
+- Model preference configured?
+- Permissions appropriately scoped (not overly permissive, not overly restrictive)?
+- Hooks defined? (PreToolUse validators, PostToolUse linters, Stop guards)
+- `cleanupPeriodDays` set to 90+?
+- Environment-specific settings documented?
 
-### Hooks
-Look in `.claude/settings.json` and any `hooks.json` for hook definitions.
-Also check for a standalone `hooks/` directory.
+### Skills / Commands evaluation
+Read each skill file. For each:
+- Does it have a clear, specific description?
+- Is it scoped to a real, repeatable workflow in this project?
+- Is `context: fork` used for tasks that would pollute the main context?
+- Are `allowed-tools` appropriate (no over-permissioning)?
+
+**Coverage check — does this project have skills for:**
+- [ ] Standard commit / PR preparation (commit message, changelog entry)
+- [ ] Code review checklist
+- [ ] Running and interpreting the test suite
+- [ ] Deployment / release workflow
+- [ ] Debugging approach (how to investigate a production issue in this system)
+- [ ] Adding a new [component/service/module] following the project's patterns
+- [ ] Domain-specific workflows (e.g., "add a new API endpoint", "create a migration")
+
+### Agents evaluation
+Read each agent file. For each:
+- Is the description precise enough for Claude to route correctly?
+- Are tool restrictions set explicitly?
+- Does the system prompt give the agent enough context to work autonomously?
+- Is the model appropriate to the task?
+
+**Agent team readiness:**
+A mature project should have agents for:
+- **Exploration/Research**: Read-only agents that understand the codebase
+- **Implementation**: Agents with write access for specific domains
+- **Review**: Agents that verify changes against standards
+- **Testing**: Agents that run tests and interpret failures
+- **Documentation**: Agents that update docs to match code changes
+
+For production/regulated projects, agents should also have:
+- Clear instructions on what NOT to do without human approval
+- Defined escalation points (what triggers a human review?)
+- Audit logging of significant agent actions
 
 ---
 
-## Section 3: CI/CD Integration
+## Step 4 — CI/CD Integration
 
 ```bash
-# GitHub Actions workflows mentioning Claude/Anthropic
 find .github/workflows -name "*.yml" -o -name "*.yaml" 2>/dev/null | xargs grep -l -i "claude\|anthropic" 2>/dev/null
-
-# Makefile / scripts
-grep -r -l -i "claude\|anthropic" Makefile scripts/ bin/ 2>/dev/null | head -10
-
-# Other CI systems
-for f in .gitlab-ci.yml .circleci/config.yml .buildkite/pipeline.yml; do
-  [ -f "$f" ] && grep -i "claude\|anthropic" "$f" && echo "Found in $f"
-done
+grep -r -l -i "claude\|anthropic" .gitlab-ci.yml Makefile .circleci/ .buildkite/ 2>/dev/null
 ```
 
-**Signs of mature CI/CD integration:**
-- PR review workflow (Claude reviews diffs and comments)
-- Security analysis on every PR
+Read any matching workflows. Evaluate:
+
+**Basic integration** (expected for Internal Tool+):
+- PR review automation (Claude reviews diff and comments)
 - Test quality review (Claude suggests missing test cases)
+
+**Intermediate integration** (expected for Production+):
+- Security analysis on every PR
 - Documentation freshness checks
 - Dependency update assistance
 - Changelog generation
 
+**Advanced integration** (expected for Regulated+):
+- Compliance check (does this change violate regulatory requirements?)
+- Architecture validation (does this change conform to the approved design?)
+- Audit trail generation
+- Risk assessment on significant changes
+
 ---
 
-## Section 4: Documentation Quality (Claude-readability)
+## Step 5 — Documentation Quality
 
 ```bash
-# Root README
 wc -l README.md 2>/dev/null
 head -50 README.md 2>/dev/null
-
-# Docs directory
 find . -name "*.md" -path "*/docs/*" -not -path "*/node_modules/*" 2>/dev/null | head -20
-
-# Architecture docs
-find . -name "ARCHITECTURE*" -o -name "DESIGN*" -o -name "ADR*" -not -path "*/node_modules/*" 2>/dev/null
+find . -name "ARCHITECTURE*" -o -name "DESIGN*" -o -name "ADR*" -o -name "adr-*.md" 2>/dev/null
+find . -name "CONTRIBUTING*" -o -name "SECURITY*" 2>/dev/null
 ```
 
 Evaluate:
-- Is the README informative with setup instructions?
-- Are there architecture or design decision records?
-- Does the code have adequate inline documentation for complex logic?
-- Could Claude onboard to this project in one session from these docs alone?
+- README: setup instructions, purpose, architecture overview?
+- Architecture/design docs: key decisions documented?
+- API documentation (for libraries/SDKs)?
+- Runbook / incident response docs (for Production+)?
+- Security policy (for Production+)?
+- Contribution guide?
+
+**Agent onboarding test:** Could an agent team read the available documentation and begin
+meaningful work on a new feature within one context window, without asking clarifying questions?
+If not, what would they need to know first?
 
 ---
 
-## Section 5: Development Practices
+## Step 6 — Production Posture (skip if PoC)
+
+For Internal Tool, Production, Regulated, Safety-Critical projects:
 
 ```bash
-# Test infrastructure
-find . -name "*.test.*" -o -name "*.spec.*" -o -name "*_test.*" -not -path "*/node_modules/*" 2>/dev/null | wc -l
+# Testing infrastructure
+find . \( -name "*.test.*" -o -name "*.spec.*" -o -name "*_test.*" -o -name "test_*.py" \) \
+  -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | wc -l
 
-# Linting / formatting config
-ls -1 .eslintrc* .prettierrc* .rubocop* pyproject.toml setup.cfg .flake8 ruff.toml 2>/dev/null
+# Coverage configuration
+cat .nycrc .istanbul.yml jest.config.* pytest.ini setup.cfg 2>/dev/null | grep -i "coverage\|threshold" | head -5
 
-# Pre-commit / git hooks
-ls .husky/ .git/hooks/ 2>/dev/null
-cat .pre-commit-config.yaml 2>/dev/null
+# Security tooling
+ls .snyk .semgrep.yml sonar-project.properties .trivyignore 2>/dev/null
+
+# Observability
+grep -r -l "logger\|logging\|sentry\|datadog\|opentelemetry\|prometheus" \
+  --include="*.{js,ts,py,go,rs,java}" . 2>/dev/null | head -5
+
+# Error handling patterns
+grep -r "try\|catch\|except\|Result\|Either" --include="*.{js,ts,py,go,rs}" \
+  -l . 2>/dev/null | wc -l
 ```
 
-A well-configured project makes Claude's job easier by having automated quality gates.
+**For Production and above, also assess:**
+- Auth and authorisation patterns (not implementation, just presence)
+- Input validation at system boundaries
+- Secrets management (are secrets in code? .env files committed?)
+- Rate limiting / abuse prevention signals
+- Data retention and privacy handling
+
+**For Regulated / High-Stakes, additionally:**
+- Compliance documentation
+- Audit logging patterns
+- Change management process (is there a formal review gate?)
+- Disaster recovery / backup strategy docs
 
 ---
 
-## Scoring
+## Step 7 — User-Facing Application Posture (skip if not user-facing)
 
-After completing all sections, assign scores:
+For applications with an end-user interface:
 
-### CLAUDE.md Quality (1–5)
-- **5**: Root file + subdirectory files, concise, covers all quality signals above
-- **4**: Root file with good coverage; some subdirectory context
-- **3**: Root file exists but thin or missing key sections
-- **2**: Minimal CLAUDE.md with very little useful context
-- **1**: No CLAUDE.md anywhere
+```bash
+# Accessibility
+grep -r -i "aria-\|role=\|alt=\|tabindex\|a11y\|wcag\|axe\|lighthouse" \
+  --include="*.{html,jsx,tsx,vue,svelte}" . 2>/dev/null | wc -l
 
-### Skills & Workflow Automation (1–5)
-- **5**: Skills for all key workflows; specialised agents; hooks for automation
-- **4**: Skills for most key workflows; some automation
-- **3**: A few skills; core workflows not fully covered
-- **2**: 1–2 skills; minimal automation
-- **1**: No skills, commands, or agents
+# i18n / l10n
+find . -name "*.po" -o -name "*.mo" -o -name "locales" -type d 2>/dev/null | head -5
 
-### CI/CD Integration (1–5)
-- **5**: Claude integrated into PR review, security, testing, and/or docs pipelines
-- **4**: Claude used in 2–3 pipeline stages
-- **3**: Claude mentioned but not deeply integrated
-- **2**: One basic Claude step in CI
-- **1**: No Claude in CI/CD
+# Performance
+grep -r -i "lighthouse\|web-vitals\|performance\|lazy\|bundle-size" \
+  --include="*.{json,yml,yaml,js,ts}" . 2>/dev/null | head -5
+```
 
-### Documentation Quality (1–5)
-- **5**: Excellent README, architecture docs, inline comments; full onboarding possible
-- **4**: Good docs with minor gaps
-- **3**: Basic README; architectural documentation sparse
-- **2**: Minimal docs; code exploration required to understand the system
-- **1**: No meaningful docs
-
-### Settings & Configuration (1–5)
-- **5**: Thoughtful settings with model, permissions, hooks, retention
-- **4**: Good settings with minor gaps
-- **3**: Default or minimal settings
-- **2**: settings.json present but near-empty
-- **1**: No settings.json; relying on global defaults
+Assess:
+- Accessibility (WCAG compliance signals, aria attributes, alt text patterns)
+- Performance testing (Lighthouse CI, Core Web Vitals monitoring)
+- Internationalisation (if relevant to the project scope)
+- Browser/device compatibility testing
 
 ---
 
-## Report Format
+## Step 8 — Score the project
 
-Output exactly this structure:
+**Calibrate all scores to the project type.**
+A PoC scoring 3/5 on CI/CD integration is fine — it doesn't need a pipeline.
+A Production application scoring 3/5 on CI/CD integration is a significant gap.
+
+State explicitly how calibration affects each score.
+
+### CLAUDE.md Quality (1–5, calibrated)
+
+| Score | PoC | Internal Tool | Production | Regulated |
+|---|---|---|---|---|
+| 5 | Root file with purpose + commands | Root + key commands + conventions | Root + subdirs + all checklist items + agent operating instructions | Root + subdirs + compliance context + formal conventions + restricted areas |
+| 3 | Root file with purpose | Root file with basic content | Root file, thin on conventions or architecture | Root file only |
+| 1 | None | None | None | None |
+
+### Skills & Workflow Automation (1–5, calibrated)
+
+| Score | PoC | Internal Tool | Production | Regulated |
+|---|---|---|---|---|
+| 5 | 1–2 useful skills | Skills for 3+ key workflows | Skills for all key workflows + agent team definitions + hooks | Full automation + human-in-loop skills + audit trail hooks |
+| 3 | No skills but not needed | 1–2 basic skills | Skills exist but missing key workflows | Skills exist but no compliance/audit integration |
+| 1 | No skills (acceptable) | No skills | No skills | No skills or hooks |
+
+### CI/CD Integration (1–5, calibrated)
+
+| Score | PoC | Internal Tool | Production | Regulated |
+|---|---|---|---|---|
+| 5 | Not needed (N/A or 5) | PR review automation | PR review + security scan + test quality + changelog | All Production + compliance check + architecture validation + risk assessment |
+| 3 | Not needed | Basic CI pipeline exists | Claude in CI but limited | Basic Claude CI without compliance |
+| 1 | Not needed | No CI | No Claude in CI | No Claude in CI |
+
+*Note: For PoC projects, assign N/A or 5 for CI/CD since it is not expected.*
+
+### Documentation Quality (1–5, calibrated)
+
+| Score | PoC | Internal Tool | Production | Regulated |
+|---|---|---|---|---|
+| 5 | README with purpose | README + setup + basic architecture | README + architecture + API docs + runbook + SECURITY.md | All Production + compliance docs + formal change log |
+| 3 | Brief README | README with setup | Good README, thin on architecture | README, missing compliance docs |
+| 1 | No README | No README | No README | No README |
+
+### Agent Team Readiness (1–5, calibrated)
+
+This dimension measures whether Claude could independently do sustained, high-quality
+autonomous work in this project without constant human oversight.
+
+*Ask*: could a team of Claude agents — an explorer, an implementer, a reviewer, and a tester —
+receive a feature spec and deliver it to the point of a human code review, without getting stuck?
+
+| Score | PoC | Internal Tool | Production | Regulated |
+|---|---|---|---|---|
+| 5 | Not needed | Agents could do a PR end-to-end | Agents deliver tested, documented features autonomously | Agents deliver compliant, audited, tested features with formal handoff |
+| 3 | Not needed | Agent could work on isolated tasks | Agents make progress but get stuck on architecture/convention decisions | Agents work but miss compliance requirements |
+| 1 | Not needed | Agents need prompting at every step | Agents need prompting at every step | Agents need prompting at every step |
+
+### Production Posture (1–5 or N/A for PoC)
+
+| Score | What it means |
+|---|---|
+| 5 | Testing with coverage thresholds + security tooling + observability + secrets management + error handling + accessibility + performance testing |
+| 4 | Most of the above; one or two gaps |
+| 3 | Basic testing; some security; limited observability |
+| 2 | Minimal testing; no security tooling; no observability |
+| 1 | No tests; no security; no observability |
+
+---
+
+## Step 9 — Produce the report
 
 ---
 
 ## Project Configuration Audit
 
-**Project**: [basename of cwd]  |  **Audit date**: [today]
+**Project**: [name] | **Type**: [PoC / Internal Tool / Production / Regulated / Safety-Critical / Plugin-Library]
+**Audit date**: [date] | **Standards calibrated to**: [type]
 
 ### Configuration Scores
 
-| Dimension | Score | Status |
-|---|---|---|
-| CLAUDE.md Quality | X/5 | ✅ Good / ⚠️ Needs Work / ❌ Missing |
-| Skills & Workflow Automation | X/5 | |
-| CI/CD Integration | X/5 | |
-| Documentation Quality | X/5 | |
-| Settings & Configuration | X/5 | |
-| **Overall** | **X.X / 5** | |
+| Dimension | Score | Status | Calibration note |
+|---|---|---|---|
+| CLAUDE.md Quality | X/5 | ✅/⚠️/❌ | [e.g., "PoC standard: root file sufficient"] |
+| Skills & Workflow Automation | X/5 | | |
+| CI/CD Integration | X/5 or N/A | | |
+| Documentation Quality | X/5 | | |
+| Agent Team Readiness | X/5 | | |
+| Production Posture | X/5 or N/A | | |
+| **Overall** | **X.X / 5** | | |
 
 ---
 
 ### What's Working Well
-[2–3 specific strengths with evidence — what exists and how it helps]
+[2–3 specific strengths with concrete evidence. Be specific — "has a CLAUDE.md" is not a strength; "CLAUDE.md covers all 8 checklist items including non-obvious gotchas and agent operating instructions" is.]
 
 ---
 
-### Critical Gaps (highest impact first)
+### Critical Gaps (impact-ordered)
 
-1. **[Gap title]** — [Why this matters, estimated effort to fix: low/medium/high]
-2. **[Gap title]** — [Same format]
-3. **[Gap title]** — [Same format]
+For each gap, state: what's missing, why it matters for this project type, and estimated effort.
+
+1. **[Gap]** (Effort: Low ~30min / Medium ~4h / High ~1 day+)
+   [Why it matters for this specific project type]
+
+2. **[Gap]** (Effort: ...)
+   [...]
+
+---
+
+### Unlock Chain
+
+Identify the dependency order — which fix enables the most other improvements:
+
+> Fix [A] first because it enables [B] and [C]. Then fix [B] because it directly enables
+> autonomous agent work. [D] can wait until [B] is done.
 
 ---
 
 ### Quick Wins (< 30 minutes each)
-
-Concrete actions the user can take right now:
-
-- [ ] [Specific action — e.g. "Add key commands to CLAUDE.md root file"]
+- [ ] [Specific action with the exact change to make]
 - [ ] [Specific action]
-- [ ] [Specific action]
+
+### Strategic Improvements (high effort, high payoff)
+- **[Title]**: [What to build and exactly why it matters for this project type]
 
 ---
 
-### Strategic Improvements (higher effort, high payoff)
+### Autonomous Agent Readiness Assessment
 
-- **[Title]**: [What to build and why — e.g. "Add a /pr-review skill that runs Claude on every PR diff"]
-- **[Title]**: [Description]
+> Could a team of Claude agents — one exploring the codebase, one implementing, one reviewing,
+> one testing — receive a feature specification and deliver a pull request without getting stuck?
+
+**Verdict**: [Yes / Partially / No — with specific blockers]
+
+**Blockers** (if any):
+- [Specific gap that would cause an agent team to fail or ask for help]
+- [...]
+
+**To reach full agent team readiness**:
+[3–5 specific changes, ordered by dependency]
 
 ---
 
-### Discovered Configuration Files
+### File Inventory
 
-| File | Status | Notes |
+| Path | Status | Assessment |
 |---|---|---|
-| CLAUDE.md (root) | ✅ Present / ❌ Missing | [brief assessment] |
-| .claude/settings.json | ✅ Present / ❌ Missing | |
-| .claude/skills/ | X files | [list names] |
-| .claude/agents/ | X files | [list names] |
-| CI/CD integration | ✅ Yes / ❌ No | [which workflows] |
+| CLAUDE.md (root) | ✅ / ❌ | [brief] |
+| .claude/settings.json | ✅ / ❌ | |
+| .claude/skills/ | N files | [names] |
+| .claude/agents/ | N files | [names] |
+| .github/workflows/ Claude integration | ✅ / ❌ | |
+| Test infrastructure | ✅ / ⚠️ / ❌ | |
+| Security tooling | ✅ / ⚠️ / ❌ | N/A for PoC |
+| Observability | ✅ / ⚠️ / ❌ | N/A for PoC |
+| Accessibility tooling | ✅ / ⚠️ / ❌ | N/A for non-UI |

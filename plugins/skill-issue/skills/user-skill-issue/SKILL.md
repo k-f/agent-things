@@ -1,6 +1,6 @@
 ---
 name: user-skill-issue
-description: Analyse your Claude Code interaction history to identify AI-fluency patterns, prompting habits, and behaviour gaps. Produces a scored report with evidence-backed recommendations. Safe to run on its own or as part of /skill-issue:skill-issue.
+description: Analyse your Claude Code interaction history to surface AI-fluency patterns, prompting habits, and behaviour gaps. Produces a calibrated, evidence-backed report with specific improvement recommendations. Safe to run on its own or as part of /skill-issue:skill-issue.
 context: fork
 agent: general-purpose
 disable-model-invocation: true
@@ -10,9 +10,8 @@ allowed-tools: Bash, Read, Glob, Grep
 
 # User Skill Issue — Interaction Log Analysis
 
-You are performing an AI-fluency audit of this user's Claude Code interaction history.
-Your output will be a rigorous, evidence-backed report that helps them become a more
-effective Claude Code user.
+You are performing a rigorous, evidence-backed AI-fluency audit of this user's Claude Code
+interaction history. Your output must be honest and calibrated. Do not grade on a curve.
 
 ## Step 1 — Clarify scope
 
@@ -21,250 +20,316 @@ Ask the user ONE question before proceeding:
 > "Should I analyse logs from **just this project** or **all projects** on this machine?
 > (Type `current` for just this project, `all` for everything. Default: current)"
 
-Wait for the response. If the user does not reply within the conversation context,
-default to **current project** and note this assumption.
+Wait for the response. Default to **current** if no reply. Store as SCOPE.
 
-Store the answer as SCOPE = "current" or "all".
+## Step 2 — Check log retention and extract messages
 
-## Step 2 — Check log retention
-
-Run:
 ```bash
 SCRIPT=$(find ~/.claude/plugins -name "extract_user_messages.py" 2>/dev/null | head -1)
 [ -z "$SCRIPT" ] && SCRIPT="${CLAUDE_PLUGIN_ROOT:-}/scripts/extract_user_messages.py"
+
+# Check retention
 python3 "$SCRIPT" --check-retention
+
+# Extract messages (1200 chars per message — do not use the 600 default)
+if [ "$SCOPE" = "all" ]; then
+  python3 "$SCRIPT" --all --limit 400 --max-chars 1200 --output-format json
+else
+  python3 "$SCRIPT" --project "$(pwd)" --limit 400 --max-chars 1200 --output-format json
+fi
 ```
 
-Parse the JSON output:
-- If `cleanup_period_days` is null or not set → warn the user and offer to set it
-- If `cleanup_period_days` < 60 → suggest increasing to at least 90 days
-- If `cleanup_period_days` >= 90 → note it is well configured
+**Retention handling:**
+- `cleanup_period_days` null or < 60 → warn prominently and offer to set to 90 days
+- If they agree, update `~/.claude/settings.json` by merging in `{"cleanupPeriodDays": 90}`
 
-**Offering to increase retention**: If retention is low, tell the user:
-> "Your logs are only kept for X days (or the default ~30). I can extend this to 90 days
-> by adding `\"cleanupPeriodDays\": 90` to `~/.claude/settings.json`. Shall I do that?
-> More history gives a richer picture of your usage patterns."
+**Sample size handling — be honest about confidence:**
+- < 10 messages: say explicitly "INSUFFICIENT DATA — analysis is speculative, not diagnostic"
+- 10–30 messages: say "LIMITED SAMPLE — treat scores as directional, not definitive"
+- 31–100 messages: "MODERATE SAMPLE — reasonable confidence in patterns"
+- > 100 messages: "GOOD SAMPLE — patterns are reliable"
 
-If they agree, edit the file:
-```bash
-# Read current settings
-cat ~/.claude/settings.json 2>/dev/null || echo "{}"
-```
-Then write back the updated JSON with `cleanupPeriodDays` set to 90 (preserving all existing keys).
+Do NOT produce a confident-sounding scored report on 3 messages. Surface the limitation prominently.
 
-## Step 3 — Extract user messages
+## Step 3 — Read FULL message content
 
-Run the extraction script based on SCOPE:
+If messages are truncated in the JSON output, re-run with `--max-chars 2000`. Evidence analysis
+requires full message text. Truncated messages produce misleading scores.
 
-```bash
-# For current project:
-python3 "$SCRIPT" --project "$(pwd)" --limit 300 --max-chars 600 --output-format json
+## Step 4 — Score against AI Fluency dimensions
 
-# For all projects:
-python3 "$SCRIPT" --all --limit 300 --max-chars 600 --output-format json
-```
-
-Parse the JSON. If `stats.total_messages_extracted` is 0 or very low (< 10), warn:
-> "Very few messages found. Logs may be new, the retention period may be short, or
-> this project may have minimal history. The analysis will be limited."
-
-## Step 4 — Analyse against AI Fluency dimensions
-
-Carefully read through ALL extracted messages before scoring.
-
-For each dimension below, scan all messages for relevant evidence.
-Quote specific messages (abbreviated to ~80 chars) to support each rating.
+Read ALL extracted messages thoroughly before scoring anything.
+For each dimension, collect evidence *before* assigning a score.
+Quote actual message text (abbreviated to ~100 chars) to support every rating.
 
 ---
 
-### Dimension 1: Prompt Clarity & Specificity
+### Dimension 1: Prompt Clarity & Specificity (1–5)
 
-Look for: precise acceptance criteria, specific function/file names, edge cases stated,
-expected output format described, version/environment constraints mentioned.
+What to look for in messages:
+- Specific file/function names, not vague references
+- Edge cases and error conditions stated upfront
+- Expected output format or acceptance criteria
+- Environment/version constraints
 
-Look out for: "make it work", "fix this", "do the thing", pronouns without referents
-("the function", "it", "that thing"), no success criteria.
+Red flags:
+- "make it work", "fix this", "do the thing"
+- No success criteria — Claude must guess what "done" looks like
+- Pronoun soup ("the function", "it", "that thing" with no referent)
 
-**Score 1–5:**
-- 5: Nearly all prompts are specific, unambiguous, with acceptance criteria
-- 4: Usually specific; occasionally vague
-- 3: Mixed — some clear, some vague
-- 2: Mostly vague; specificity is the exception
-- 1: Consistently vague or underspecified
-
----
-
-### Dimension 2: Context Provision
-
-Look for: pasting error messages, stack traces, file references, mentioning related
-files/functions, describing the broader system, stating constraints, environment details.
-
-Look out for: no context given ("it broke"), not mentioning what they already tried,
-not sharing relevant code or error output.
-
-**Score 1–5:**
-- 5: Proactively shares error logs, file paths, relevant code snippets, system context
-- 4: Usually provides context; occasional gaps
-- 3: Sometimes shares context; Claude often has to ask or guess
-- 2: Rarely shares context; relies on Claude to figure it out
-- 1: No context provided; bare assertions like "it's not working"
+**Scale:**
+- **5**: Every prompt has unambiguous acceptance criteria; Claude knows exactly when it's done without asking
+- **4**: Usually specific; occasionally vague on acceptance criteria
+- **3**: Mix — some prompts are clear, others leave Claude guessing at what success looks like
+- **2**: Usually vague; specificity is the exception
+- **1**: Consistent stream of underspecified requests; Claude must ask before every action
 
 ---
 
-### Dimension 3: Goal-Setting & Autonomy Granting
+### Dimension 2: Context Provision (1–5)
 
-This is the highest-leverage dimension. High-capability users give Claude a goal +
-success criteria and trust it to decide the approach. Low-capability users micro-manage
-step by step.
+What to look for:
+- Error messages and stack traces pasted inline
+- File paths and function names referenced
+- Relevant code snippets provided
+- System/environment context given when relevant
+- Constraints explicitly stated
 
-Look for: "implement X so that Y", "make it so the tests pass", "refactor this to
-follow our pattern", giving Claude latitude on *how*.
+Red flags:
+- "it broke" with no diagnostic information
+- Not mentioning what was already tried
+- Expecting Claude to have context from a previous session it can't access
 
-Look out for: "now add this parameter", "now write this exact function", "do only
-this one thing and nothing else", excessive step-by-step decomposition that Claude
-should be doing itself.
-
-**Score 1–5:**
-- 5: Gives Claude goals; trusts it to plan and execute autonomously
-- 4: Usually goal-oriented; occasionally over-specifies steps
-- 3: Mix of goal and step-by-step; inconsistent
-- 2: Mostly step-by-step; rarely gives Claude latitude
-- 1: Extreme micro-management; one tiny instruction at a time
-
----
-
-### Dimension 4: Iterative Efficiency
-
-Look for: referencing previous outputs ("now add X to what you just built"),
-building progressively, not repeating context already established, session continuity.
-
-Look out for: restarting from scratch in every session, re-explaining the same
-context repeatedly, not building on prior outputs.
-
-**Score 1–5:**
-- 5: Smooth iterative building; sessions chain naturally; minimal repetition
-- 3: Some continuity; occasional restarts
-- 1: Each session starts from zero; no thread maintained
+**Scale:**
+- **5**: Proactively provides all context Claude needs; Claude never has to ask for more before starting
+- **4**: Usually sufficient context; occasional gaps that require a clarifying question
+- **3**: Sometimes provides context; Claude often has to ask or make assumptions
+- **2**: Rarely provides context; relies on Claude to figure out the situation
+- **1**: No context; bare assertions; Claude must run its own discovery on every request
 
 ---
 
-### Dimension 5: Feedback Quality
+### Dimension 3: Goal-Setting & Success Criteria (1–5)
 
-Look for: pasting test output, sharing "X works but Y fails", quoting specific error
-messages in follow-ups, referencing exact lines or behaviours that are wrong.
+This is the highest-leverage dimension. It measures whether the user has moved from
+"give Claude tasks" to "give Claude goals with a way to know when it has succeeded."
 
-Look out for: "that didn't work", "try again", "it's still broken" with no diagnostic
-information.
+**The distinction matters enormously:**
+- "Add a test for the login function" → task (Claude does exactly that and stops)
+- "The login function has a bug that fails when the password contains special chars — make the tests pass and ensure similar cases are covered" → goal with criteria (Claude can keep iterating until done)
+- "Implement JWT auth so that a user can log in, maintain session, and the security tests all pass" → autonomous goal (agent team material)
 
-**Score 1–5:**
-- 5: Always provides specific, actionable feedback with evidence
-- 3: Some specifics; often general
-- 1: Consistently says "it's wrong" with no diagnostic detail
+Red flags:
+- Step-by-step instructions that Claude should be generating itself
+- No way for Claude to know when it's done without asking
+- Goal depends on implicit knowledge Claude doesn't have
 
----
-
-### Dimension 6: Claude Code Feature Utilisation
-
-Look for: mentions of `/` commands, references to CLAUDE.md, mentions of agents or
-skills, discussion of hooks, project settings, using Claude for CI/CD or automation.
-
-Look out for: treating Claude Code as a plain chatbot with no project memory, no
-mention of tooling or automation.
-
-**Score 1–5:**
-- 5: Uses CLAUDE.md, skills, agents, hooks; integrates Claude into workflows
-- 3: Uses some features (maybe a CLAUDE.md) but not advanced ones
-- 1: No evidence of using Claude Code's extended capabilities
+**Scale:**
+- **5**: Goal + explicit success criteria + Claude can self-validate completion without asking. Compatible with 10+ turn autonomous work.
+- **4**: Clear goal; success is usually inferrable; occasionally needs a check-in to confirm done
+- **3**: Mix of goals and explicit tasks; Claude usually needs to ask "is this what you meant?"
+- **2**: Mostly explicit tasks; Claude executes exactly what's said and waits
+- **1**: Micro-management — "now add this line", "now rename that variable" — Claude is a keyboard, not an agent
 
 ---
 
-### Dimension 7: Domain Vocabulary & Precision
+### Dimension 4: Autonomy Depth & Agent Utilisation (1–5)
 
-Look for: correct use of technical terms, referencing specific APIs/frameworks by name,
-precise architectural language.
+This measures how much Claude Code capability the user actually deploys.
 
-Look out for: describing things by analogy ("the thing that stores users"), avoiding
-technical names, overly informal descriptions of technical concepts.
+Hierarchy of autonomy (lowest to highest):
+1. Single-turn responses — answer a question
+2. Multi-turn tasks — a few back-and-forths
+3. Autonomous sessions — Claude works for 10+ turns without interruption
+4. Subagent delegation — Claude spawns specialised agents for sub-problems
+5. **Agent teams** — Claude coordinates multiple agents working in parallel on a large goal, self-validates output, delivers production-ready results
 
-**Score 1–5:**
-- 5: Precise, domain-appropriate vocabulary throughout
-- 3: Mostly correct; occasional vagueness
-- 1: Avoids technical vocabulary; indirect descriptions
+Signs of high autonomy:
+- User mentions spawning subagents or using agent teams
+- Long autonomous sessions without mid-stream interruption
+- User gives Claude a whole feature/system to build, not just a function
+- User references agent roles (Explore, Plan, general-purpose, custom agents)
+- User runs Claude on large-scale, multi-file work autonomously
+
+Red flags:
+- User describes waiting for Claude between every small step
+- User never mentions subagents or agents
+- Largest unit of work is a single function or file
+
+**Scale:**
+- **5**: Regularly uses agent teams for large, complex, multi-file work; agents self-validate and deliver production-ready output; minimal mid-work interruption by user
+- **4**: Uses subagents; delegates substantial work autonomously; trusts Claude to plan and execute
+- **3**: Runs single-agent sessions for tasks of moderate size; some autonomy but still hands-on
+- **2**: Mostly single-turn interactions; occasionally lets Claude do multi-step work
+- **1**: One instruction at a time; never delegates; Claude is essentially a linter
 
 ---
 
-## Step 5 — Identify user capability profile
+### Dimension 5: Feedback Quality & Iteration (1–5)
 
-Based on the overall evidence, classify the user as one of:
+Measures: when Claude produces output, does the user provide diagnostic feedback that
+enables Claude to self-correct, or do they issue a new instruction and start over?
 
-- **Navigator** (avg 4.5+): Gives Claude goals and frameworks; treats it as a peer engineer; high autonomy; good feedback loops; full feature utilisation
-- **Collaborator** (avg 3.5–4.4): Generally effective; some micro-management or context gaps; uses core features; room to extend
-- **Delegator** (avg 2.5–3.4): Getting there; inconsistent quality; misses opportunities to leverage Claude's capabilities
-- **Apprentice** (avg 1.5–2.4): Still learning the interaction model; tends to micro-manage or provide thin context
-- **Beginner** (avg < 1.5): Using Claude Code like a basic chatbot; foundational skills needed
+What good feedback looks like:
+- "The login test passes but the registration flow still fails with: [stack trace]"
+- "This works for happy path but breaks when the user has no profile yet — see: [error]"
+- Pasting the actual test output, not a description of it
+- Referencing specific lines or behaviours, not general assessments
+
+Red flags:
+- "that didn't work" with no diagnostic info
+- "try again" — Claude must guess what was wrong
+- No follow-up in the logs (user moved to a new session without iterating)
+
+**Scale:**
+- **5**: Every correction includes specific evidence (error output, test results, failing assertion); Claude can self-correct without further prompting
+- **4**: Usually provides specific feedback; occasional "that didn't work" gaps
+- **3**: Mix of specific and general feedback
+- **2**: Mostly general feedback; Claude has to probe for specifics
+- **1**: No feedback loop; either accepts first output or restarts entirely
+
+---
+
+### Dimension 6: Output Quality Standards (1–5)
+
+This dimension is often overlooked but is critical. Does the user specify the quality
+bar for Claude's output, or leave it implicit? And when they do specify, is it appropriate
+to the context?
+
+High-capability users calibrate quality to context:
+- PoC: "doesn't need to be production-ready, just functional"
+- Internal tool: "needs to work reliably but aesthetic polish isn't required"
+- Production: "must include error handling, logging, and tests"
+- Regulated: "must comply with [standard], include audit logging, and be reviewed"
+- Safety-critical: "must pass formal verification before deployment"
+
+Red flags:
+- No quality specification at all (leaves it to Claude's defaults)
+- Asks for production-quality on exploratory work (wasted effort)
+- Asks for "quick" work on production systems (technical debt)
+- Never mentions tests, error handling, or review processes
+
+**Scale:**
+- **5**: Consistently specifies quality requirements appropriate to context; adjusts bar between PoC and production work explicitly; requests tests, review, and validation as appropriate
+- **4**: Usually specifies quality; occasionally leaves it implicit but at a reasonable level
+- **3**: Some quality specification; inconsistent; often relies on Claude's judgment
+- **2**: Rarely specifies quality requirements; Claude guesses what bar to apply
+- **1**: Never mentions quality; treats all work as either "make it work" or "make it perfect" regardless of context
+
+---
+
+### Dimension 7: Claude Code Feature Utilisation (1–5)
+
+Measures: does the user leverage Claude Code's extended capabilities beyond basic chat?
+
+Signs of mature utilisation:
+- References or maintains CLAUDE.md files for persistent context
+- Uses project-scoped or personal skills for repeatable workflows
+- Defines custom agents for domain-specific tasks
+- Uses hooks for automation (pre/post tool use, commit checks)
+- Has Claude integrated into CI/CD (PR review, test analysis, security scans)
+- Uses `context: fork` for large tasks to protect main context
+- References session memory and agent memory
+
+Red flags:
+- No mention of CLAUDE.md, skills, agents, or hooks in any message
+- Starting every session with re-explaining the project from scratch
+- Never delegating to specialised agents
+
+**Scale:**
+- **5**: CLAUDE.md maintained; project-scoped skills for key workflows; custom agents; hooks; Claude integrated in CI/CD; uses agent teams. Claude never has to rediscover project context.
+- **4**: CLAUDE.md and some skills; basic agent use; limited CI/CD integration
+- **3**: CLAUDE.md exists or some skills exist; mostly manual workflow
+- **2**: Aware of features but rarely uses them; occasional /command invocation
+- **1**: Uses Claude Code as a basic chatbot; no persistent context; no automation
+
+---
+
+### Dimension 8: Domain Vocabulary & Technical Precision (1–5)
+
+- **5**: Precise, domain-appropriate vocabulary; references specific APIs, protocols, frameworks, standards by name; uses architectural vocabulary correctly
+- **3**: Mostly correct terminology; occasional vagueness
+- **1**: Describes things by analogy; avoids technical names; indirect descriptions
+
+---
+
+## Step 5 — Capability profile
+
+Calculate average score across all 8 dimensions. Map to profile:
+
+| Profile | Score range | What it looks like |
+|---|---|---|
+| **Orchestrator** | 4.5+ | Uses agent teams for large, complex work; agents self-validate; minimal mid-work interruption; production-quality outcomes as default; Claude integrated into development workflow; CLAUDE.md and skills as second nature |
+| **Navigator** | 3.5–4.4 | Gives Claude clear goals with success criteria; runs autonomous sessions; uses subagents; maintains project context; specifies quality appropriately; good feedback loops |
+| **Collaborator** | 2.5–3.4 | Mostly goal-oriented; some micromanagement; uses basic Claude Code features; inconsistent feedback quality; works session-by-session |
+| **Apprentice** | 1.5–2.4 | Task-by-task instructions; thin context provision; limited feature use; treats Claude as a smart autocomplete |
+| **Beginner** | < 1.5 | Using Claude Code like a chatbot; one-line instructions; no persistent context; no automation |
+
+**Important**: Orchestrator requires evidence of agent team usage or large autonomous work, not
+just good prompting. A user who writes excellent prompts but supervises every step is a Navigator,
+not an Orchestrator.
 
 ## Step 6 — Produce the report
-
-Output this exact structure:
 
 ---
 
 ## User AI Fluency Report
 
-**Capability Profile**: [Navigator / Collaborator / Delegator / Apprentice / Beginner]
+**Confidence**: [INSUFFICIENT DATA / LIMITED SAMPLE / MODERATE SAMPLE / GOOD SAMPLE]
 
-**Sessions analysed**: N | **Messages reviewed**: N | **Date range**: YYYY-MM-DD – YYYY-MM-DD
+**Capability Profile**: [Profile name]
 
-**Log retention**: X days [configured] / Not configured (using default ~30 days) — [recommendation if low]
+**Evidence base**: [N] sessions | [N] messages | [Date range] | [Retention: X days / not configured]
+
+> [If small sample: add a prominent warning that scores are provisional and specific dimensions
+> cannot be reliably assessed without more data. Be explicit about which scores you are confident
+> in vs which are guesses.]
 
 ---
 
 ### Scores
 
-| Dimension | Score | Rating |
+| Dimension | Score | Confidence |
 |---|---|---|
-| Prompt Clarity & Specificity | X/5 | ⭐⭐⭐ |
+| Prompt Clarity & Specificity | X/5 | High/Medium/Low |
 | Context Provision | X/5 | |
-| Goal-Setting & Autonomy | X/5 | |
-| Iterative Efficiency | X/5 | |
-| Feedback Quality | X/5 | |
+| Goal-Setting & Success Criteria | X/5 | |
+| Autonomy Depth & Agent Utilisation | X/5 | |
+| Feedback Quality & Iteration | X/5 | |
+| Output Quality Standards | X/5 | |
 | Feature Utilisation | X/5 | |
 | Domain Vocabulary | X/5 | |
 | **Overall** | **X.X / 5** | |
 
 ---
 
-### Strengths
+### Strengths (evidence-backed)
 
-For each strength, include a supporting quote from the actual messages.
-
-1. **[Strength title]**: [explanation] — *Example: "[message quote ~60 chars]"*
-2. **[Strength title]**: [explanation] — *Example: "[message quote ~60 chars]"*
+For each strength: title, observation, supporting quote from actual messages.
 
 ---
 
-### Growth Areas
+### Growth Areas (evidence-backed)
 
-For each area, include the evidence and a concrete suggestion.
-
-1. **[Area]**: [What you observed] — *Example: "[message quote]"*
-   - **Try instead**: [specific rewrite or technique]
-
-2. **[Area]**: [What you observed] — *Example: "[message quote]"*
-   - **Try instead**: [specific rewrite or technique]
+For each area: title, observed pattern with evidence, specific rewrite or behaviour change.
+Be concrete — show the before and after.
 
 ---
 
-### Top Recommendations (ranked by impact)
+### Priority Recommendations
 
-1. **[Title]** — [1–2 sentence description of what to change and why it matters]
-2. **[Title]** — [1–2 sentence description]
-3. **[Title]** — [1–2 sentence description]
+Ordered by **unlock value** — fix these first because they unblock everything else.
+
+1. **[Title]** (Effort: Low/Medium/High | Unlocks: [what this enables])
+   [Specific action + why + expected impact]
+
+2. **[Title]** (Effort: Low/Medium/High | Unlocks: [what this enables])
+
+3. **[Title]** (Effort: Low/Medium/High | Unlocks: [what this enables])
 
 ---
 
-### Resources
+### Log Retention
 
-- [Claude Code skills documentation](https://code.claude.com/docs/en/skills) — create project-specific slash commands
-- [CLAUDE.md memory guide](https://code.claude.com/docs/en/memory) — persistent project context
-- [Custom agents](https://code.claude.com/docs/en/sub-agents) — specialised task delegation
+[If not configured or < 60 days: specific command to fix, and note that this is required
+for the skill to be useful on future runs]

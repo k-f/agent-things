@@ -1,6 +1,6 @@
 ---
 name: skill-issue
-description: Full Claude Code effectiveness diagnosis — analyses both your interaction patterns (user AI fluency) and your project's configuration quality, then delivers a unified prioritised improvement report.
+description: Full Claude Code effectiveness diagnosis — analyses both your interaction patterns (user AI fluency) and your project's configuration quality, calibrated to the project type and stakes. Delivers a unified prioritised improvement report with unlock-chain ordering.
 context: fork
 agent: general-purpose
 disable-model-invocation: true
@@ -11,101 +11,158 @@ allowed-tools: Bash, Read, Glob, Grep
 # Skill Issue — Full Claude Code Diagnosis
 
 You are running a comprehensive diagnosis of Claude Code effectiveness.
-This covers TWO areas:
-1. **User skill issues** — how well the user interacts with Claude Code
-2. **Project skill issues** — how well this project is configured for Claude Code
+Two analyses run in this same forked context to protect the main conversation window:
+1. **Project skill issues** — how well this project is configured for Claude Code
+2. **User skill issues** — how effectively the user interacts with Claude Code
 
-Both analyses run in this same context to protect the main conversation window.
-Work through them sequentially, then synthesise into a single unified report.
+Both are calibrated to context. A PoC and a regulated production system are judged
+by completely different standards. State your calibration assumptions clearly.
 
 ---
 
-## Preliminary — Clarify scope
+## Preliminary — Gather context and clarify scope
 
-Before starting, ask the user ONE question:
+Ask TWO questions before starting any analysis:
 
-> "I'm going to diagnose both your Claude Code interaction patterns AND this project's
-> configuration. For the interaction log analysis, should I look at:
->
-> 1. **current** — just this project's logs
-> 2. **all** — logs from all projects on this machine
->
-> (Reply `current` or `all`, or press Enter to use `current`)"
+> **Question 1**: For the user log analysis, should I look at:
+> - `current` — just this project's logs (default)
+> - `all` — logs from all projects on this machine
 
-Wait for the response. Store it as SCOPE. Default to "current" if no reply.
+> **Question 2**: What type of project is this?
+> - `poc` — proof of concept / experiment
+> - `internal` — internal team tool
+> - `production` — external users, reliability matters
+> - `regulated` — compliance requirements, audit trails, significant harm possible
+> - `library` — consumed by other developers, API stability matters
+> - `unsure` — let me figure it out from the codebase
+
+If the user answers `unsure` (or doesn't reply), determine project type yourself:
+```bash
+ls -1
+cat README.md 2>/dev/null | head -40
+ls Dockerfile docker-compose.yml .github/workflows/ kubernetes/ 2>/dev/null
+grep -r -i "hipaa\|gdpr\|soc2\|pci\|compliance\|regulated" README.md docs/ 2>/dev/null | head -3
+```
+
+Store: SCOPE = "current"/"all" and PROJECT_TYPE = "poc"/"internal"/"production"/"regulated"/"library"
 
 ---
 
 ## Part A — Project Configuration Audit
 
-### A1. Discover CLAUDE.md files
+Work through each section. Gather evidence first. Score after.
+
+### A1. CLAUDE.md files
 
 ```bash
-echo "=== CLAUDE.md files ==="
-find . -name "CLAUDE.md" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/vendor/*" 2>/dev/null
+find . -name "CLAUDE.md" -not -path "*/node_modules/*" -not -path "*/.git/*" \
+  -not -path "*/vendor/*" -not -path "*/dist/*" 2>/dev/null | sort
 ```
 
-Read each CLAUDE.md found. Evaluate against:
-- Project overview / purpose present?
-- Tech stack documented?
-- Key commands (build / test / lint / deploy) listed?
-- Coding conventions described?
-- Architecture / non-obvious decisions explained?
-- Anti-patterns or off-limits areas noted?
-- Subdirectory CLAUDE.md files for specific areas?
-- Length appropriate (under ~500 lines)?
+Read each CLAUDE.md found. For the root CLAUDE.md, check against this complete list:
 
-### A2. Audit `.claude/` directory
+- [ ] Project purpose and business context
+- [ ] Tech stack, key dependencies, version constraints
+- [ ] Key commands: build, test (unit/integration/e2e), lint, typecheck, deploy, rollback
+- [ ] Coding conventions and style
+- [ ] Architecture decisions with rationale
+- [ ] Anti-patterns and protected areas (what Claude must not change)
+- [ ] How to run locally
+- [ ] Non-obvious gotchas
+- [ ] Domain-specific knowledge
+- [ ] Agent operating instructions (if agents are used: what can they do autonomously vs what needs human approval)
+
+Check for subdirectory CLAUDE.md files:
+```bash
+find . -mindepth 2 -maxdepth 6 -name "CLAUDE.md" -not -path "*/node_modules/*" 2>/dev/null
+```
+
+**Autonomous agent readiness test for CLAUDE.md:** Could an agent team start meaningful work
+in this project from the CLAUDE.md alone, without asking clarifying questions in the first 5 turns?
+
+### A2. `.claude/` directory
 
 ```bash
-echo "=== .claude/ structure ==="
 find .claude -type f 2>/dev/null | sort
-echo "=== settings.json ==="
-cat .claude/settings.json 2>/dev/null || echo "(no settings.json found)"
-echo "=== skills/commands ==="
+cat .claude/settings.json 2>/dev/null || echo "(none)"
 find .claude/skills .claude/commands -type f 2>/dev/null | sort
-echo "=== agents ==="
 find .claude/agents -type f 2>/dev/null | sort
 ```
 
-Read each skill/command and agent file found. Evaluate quality and coverage.
+Read each skill and agent file. Evaluate:
+- Are there skills for key project workflows?
+- Are agents defined for specialised tasks?
+- Are hooks configured for automation?
+- Is `cleanupPeriodDays` set?
 
-**Key workflows that SHOULD have skills:**
-- commit / changelog creation
-- PR/code review
-- running and interpreting tests
-- deploy workflow
-- debugging approach
+**Key workflow coverage check:**
+- commit / PR preparation
+- code review checklist
+- running and interpreting the test suite
+- deployment / release
+- debugging a production issue
+- adding a new [component/service] following project patterns
+- any domain-specific workflows
+
+**Agent team completeness check (Production+):**
+- Explorer agent (read-only, codebase understanding)
+- Implementer agent (write access, domain-specific)
+- Reviewer agent (validates changes against standards)
+- Tester agent (runs tests, interprets failures)
+- Documentation agent (keeps docs current)
 
 ### A3. CI/CD integration
 
 ```bash
-echo "=== CI/CD with Claude ==="
-find .github/workflows -name "*.yml" -o -name "*.yaml" 2>/dev/null | xargs grep -l -i "claude\|anthropic" 2>/dev/null
-grep -r -l -i "claude\|anthropic" Makefile scripts/ bin/ 2>/dev/null | head -5
+find .github/workflows -name "*.yml" -o -name "*.yaml" 2>/dev/null | \
+  xargs grep -l -i "claude\|anthropic" 2>/dev/null
+grep -r -l -i "claude\|anthropic" .gitlab-ci.yml Makefile .circleci/ .buildkite/ 2>/dev/null
 ```
 
-### A4. Documentation quality
+Read any matching workflow files. Evaluate maturity:
+- **Basic** (Internal+): PR review automation
+- **Intermediate** (Production+): security scan, test quality review, changelog, docs check
+- **Advanced** (Regulated+): compliance check, architecture validation, risk assessment
+
+### A4. Documentation
 
 ```bash
-echo "=== README ==="
 wc -l README.md 2>/dev/null
-head -30 README.md 2>/dev/null
-echo "=== Docs ==="
-find . -name "*.md" -path "*/docs/*" -not -path "*/node_modules/*" 2>/dev/null | head -10
-find . -name "ARCHITECTURE*" -o -name "DESIGN*" 2>/dev/null
+head -40 README.md 2>/dev/null
+find . -name "*.md" -path "*/docs/*" -not -path "*/node_modules/*" 2>/dev/null | head -15
+find . -name "ARCHITECTURE*" -o -name "DESIGN*" -o -name "ADR*" 2>/dev/null
+find . -name "CONTRIBUTING*" -o -name "SECURITY*" -o -name "RUNBOOK*" 2>/dev/null
 ```
 
-### A5. Score the project (1–5 per dimension)
+### A5. Production posture (skip for PoC)
 
-| Dimension | Evidence | Score |
-|---|---|---|
-| CLAUDE.md Quality | [what you found] | X/5 |
-| Skills & Workflow Automation | | X/5 |
-| CI/CD Integration | | X/5 |
-| Documentation Quality | | X/5 |
-| Settings & Configuration | | X/5 |
-| **Project Overall** | | **X.X/5** |
+```bash
+# Test count
+find . \( -name "*.test.*" -o -name "*.spec.*" -o -name "*_test.py" -o -name "test_*.py" \) \
+  -not -path "*/node_modules/*" 2>/dev/null | wc -l
+
+# Security tooling signals
+ls .snyk .semgrep.yml sonar-project.properties 2>/dev/null
+
+# Observability signals
+grep -r -l "sentry\|datadog\|opentelemetry\|prometheus\|logging" \
+  --include="*.{js,ts,py,go}" . 2>/dev/null | wc -l
+
+# Secrets safety
+grep -r "API_KEY\|SECRET\|PASSWORD\|TOKEN" .env* 2>/dev/null | head -3
+ls .gitignore 2>/dev/null && grep -i "\.env\|secret\|credential" .gitignore
+```
+
+### A6. User-facing posture (skip if not user-facing)
+
+```bash
+# Accessibility signals
+grep -r -i "aria-\|role=\|alt=\|a11y\|wcag\|axe" --include="*.{html,jsx,tsx,vue,svelte}" \
+  . 2>/dev/null | wc -l
+
+# Performance signals
+grep -r -i "lighthouse\|web-vitals\|performance" --include="*.{json,yml}" . 2>/dev/null | head -5
+```
 
 ---
 
@@ -116,184 +173,219 @@ find . -name "ARCHITECTURE*" -o -name "DESIGN*" 2>/dev/null
 ```bash
 SCRIPT=$(find ~/.claude/plugins -name "extract_user_messages.py" 2>/dev/null | head -1)
 [ -z "$SCRIPT" ] && SCRIPT="${CLAUDE_PLUGIN_ROOT:-}/scripts/extract_user_messages.py"
-echo "Script location: $SCRIPT"
+echo "Script: $SCRIPT"
 python3 "$SCRIPT" --check-retention
 ```
 
-Note the `cleanup_period_days` value:
-- null / not set → warn (default ~30 days); offer to increase
-- < 60 days → suggest 90 days
-- >= 90 days → note as well configured
+If retention is null or < 60 days: offer to update it to 90 days and do so if agreed.
 
-If retention is low, offer to update it (read settings.json, add/update cleanupPeriodDays: 90, write back). Only do so if the user agrees.
-
-### B2. Extract messages
+### B2. Extract messages (use 1200 chars — never the 600-char default)
 
 ```bash
 if [ "$SCOPE" = "all" ]; then
-  python3 "$SCRIPT" --all --limit 300 --max-chars 600 --output-format json
+  python3 "$SCRIPT" --all --limit 400 --max-chars 1200 --output-format json
 else
-  python3 "$SCRIPT" --project "$(pwd)" --limit 300 --max-chars 600 --output-format json
+  python3 "$SCRIPT" --project "$(pwd)" --limit 400 --max-chars 1200 --output-format json
 fi
 ```
 
-If fewer than 10 messages are found, note the limitation and proceed with what's available.
+If messages are still truncated, re-run with `--max-chars 2000`.
 
-### B3. Analyse against AI Fluency dimensions
+**Sample size — be honest:**
+- < 10 messages: "INSUFFICIENT DATA — provisional only"
+- 10–30: "LIMITED SAMPLE — directional, not definitive"
+- 31–100: "MODERATE SAMPLE — reasonable confidence"
+- 100+: "GOOD SAMPLE — patterns reliable"
 
-Read ALL extracted messages. For each dimension, find specific message evidence
-(quote ~60–80 chars) before assigning a score.
+State sample quality prominently. Adjust score confidence accordingly.
 
-**Dimension 1: Prompt Clarity & Specificity**
-- Look for: specific file/function names, acceptance criteria, edge cases stated, expected output described
-- Look out for: "make it work", "fix this", no success criteria, vague pronouns
+### B3. Analyse all 8 user dimensions
 
-**Dimension 2: Context Provision**
-- Look for: error messages, stack traces, file references, environment constraints
-- Look out for: bare "it broke" or "it's not working" with no diagnostic info
-
-**Dimension 3: Goal-Setting & Autonomy Granting** ← Highest leverage dimension
-- Look for: "implement X so that Y passes", "make the tests green", trusting Claude to choose approach
-- Look out for: "now add this parameter", "now write this exact function", one-step-at-a-time micro-management
-
-**Dimension 4: Iterative Efficiency**
-- Look for: references to prior outputs, building progressively, session continuity
-- Look out for: re-explaining the same context every session, restarts from scratch
-
-**Dimension 5: Feedback Quality**
-- Look for: pasting test output, "X works but Y fails", quoting specific errors in follow-ups
-- Look out for: "that didn't work", "try again", no diagnostic info
-
-**Dimension 6: Claude Code Feature Utilisation**
-- Look for: mentions of CLAUDE.md, skills, agents, hooks, CI automation
-- Look out for: treating Claude Code as a plain chatbot; no mention of persistent context
-
-**Dimension 7: Domain Vocabulary & Precision**
-- Look for: precise technical terms, API/framework names, architectural vocabulary
-- Look out for: indirect descriptions, avoiding technical names
-
-### B4. Score the user (1–5 per dimension)
-
-| Dimension | Evidence quote | Score |
-|---|---|---|
-| Prompt Clarity & Specificity | "[quote]" | X/5 |
-| Context Provision | "[quote]" | X/5 |
-| Goal-Setting & Autonomy | "[quote]" | X/5 |
-| Iterative Efficiency | "[quote]" | X/5 |
-| Feedback Quality | "[quote]" | X/5 |
-| Feature Utilisation | "[quote]" | X/5 |
-| Domain Vocabulary | "[quote]" | X/5 |
-| **User Overall** | | **X.X/5** |
-
-**Capability profile** (based on overall user score):
-- Navigator (4.5+): Gives goals + success criteria; treats Claude as peer engineer; high autonomy
-- Collaborator (3.5–4.4): Generally effective; some over-specification; good feature use
-- Delegator (2.5–3.4): Developing; inconsistent quality; misses autonomy opportunities
-- Apprentice (1.5–2.4): Micro-managing tendencies; thin context provision
-- Beginner (< 1.5): Using Claude Code like a basic chatbot
+For each dimension, collect evidence before scoring.
+Quote actual message text to support every rating.
 
 ---
 
-## Part C — Unified Report
+#### Dimension 1: Prompt Clarity & Specificity (1–5)
+- **5**: Unambiguous acceptance criteria on every request; Claude knows exactly when it's done
+- **3**: Mix of clear and vague; occasionally Claude must guess at success criteria
+- **1**: Consistent underspecification; Claude must ask before every action
 
-Synthesise both analyses into one coherent report. Critically, identify where **user behaviour** and **project configuration** gaps reinforce each other (e.g. user doesn't use skills because no skills are configured; user gives thin context because there's no CLAUDE.md to carry persistent context).
+#### Dimension 2: Context Provision (1–5)
+- **5**: All relevant context provided proactively; Claude never has to ask before starting
+- **3**: Sometimes sufficient; sometimes Claude must probe for more
+- **1**: No context; Claude must run discovery on every request
 
-Output the following report exactly:
+#### Dimension 3: Goal-Setting & Success Criteria (1–5)
+The key question: can Claude know when it's done, without asking?
+- **5**: Goal + explicit measurable success criteria + Claude can self-validate; compatible with 10+ turn autonomous work
+- **3**: Clear goal; success is inferrable but not stated explicitly
+- **1**: Step-by-step instructions; Claude cannot judge completion independently
+
+#### Dimension 4: Autonomy Depth & Agent Utilisation (1–5)
+- **5**: Agent teams used for large, complex work; agents self-validate; minimal mid-work interruption; production-ready delivery
+- **4**: Subagents used; substantial autonomous sessions; trusts Claude to plan
+- **3**: Autonomous single-agent sessions of moderate length
+- **2**: Mostly single-turn; occasional multi-step delegation
+- **1**: One instruction at a time; Claude is a keyboard
+
+#### Dimension 5: Feedback Quality & Iteration (1–5)
+- **5**: Every correction includes specific evidence (test output, error traces); Claude self-corrects
+- **3**: Mix of specific and general feedback
+- **1**: "Try again" with no diagnostic info; or no feedback loop at all
+
+#### Dimension 6: Output Quality Standards (1–5)
+Does the user specify the quality bar? Is it calibrated to context?
+- **5**: Quality requirements explicitly stated and appropriate to context (PoC vs production); requests tests/review/validation at the right level
+- **3**: Implicit quality bar; relies on Claude's judgment
+- **1**: Never specifies quality; or applies the same bar to everything regardless of stakes
+
+#### Dimension 7: Claude Code Feature Utilisation (1–5)
+- **5**: CLAUDE.md maintained; project skills; custom agents; hooks; CI/CD integration; agent teams
+- **3**: CLAUDE.md and/or some skills; mostly manual workflow
+- **1**: Basic chatbot usage; no persistent context; no automation
+
+#### Dimension 8: Domain Vocabulary & Technical Precision (1–5)
+- **5**: Precise domain vocabulary; correct technical terminology; architectural precision
+- **3**: Generally correct; occasional vagueness
+- **1**: Indirect descriptions; avoids technical vocabulary
+
+---
+
+**Capability profile:**
+
+| Profile | Score | What it requires |
+|---|---|---|
+| **Orchestrator** | 4.5+ | Evidence of agent team usage or large autonomous sessions; agents self-validate; production-quality output as default; CI/CD integrated; CLAUDE.md and skills as second nature |
+| **Navigator** | 3.5–4.4 | Clear goals with success criteria; autonomous sessions; uses subagents; maintains project context; good feedback loops |
+| **Collaborator** | 2.5–3.4 | Mostly goal-oriented; some micromanagement; uses basic features; inconsistent feedback |
+| **Apprentice** | 1.5–2.4 | Task-by-task instructions; thin context; limited feature use |
+| **Beginner** | < 1.5 | Basic chatbot usage; one-liners; no persistent context |
+
+---
+
+## Part C — Synthesise into Unified Report
+
+Connect the two analyses. Identify reinforcing patterns — where user behaviour and project configuration gaps compound each other.
+
+Common compound patterns to check:
+- "User gives thin context each session" + "no CLAUDE.md" → context must be re-provided every session → fix CLAUDE.md first
+- "User doesn't use skills" + "no skills configured" → user can't use what doesn't exist → fix skills first
+- "User doesn't use agent teams" + "no agent definitions" → agent teams aren't configured → create agent definitions
+- "User gives Claude high autonomy" + "no test suite Claude can run" → Claude can't verify its work autonomously → add tests + test-runner skill
+
+---
+
+## Report Format
 
 ---
 
 # Skill Issue Report
 
-> Complete diagnosis of your Claude Code effectiveness.
+> Comprehensive diagnosis of your Claude Code effectiveness, calibrated to project type.
+
+## Context
+
+**Project type**: [PoC / Internal Tool / Production / Regulated / Library]
+**Standards calibrated to**: [type]
+**User log sample quality**: [INSUFFICIENT / LIMITED / MODERATE / GOOD]
 
 ## Summary Dashboard
 
-| Area | Score | Capability Level |
+| Area | Score | Level |
 |---|---|---|
-| **You** (interaction patterns) | X.X / 5 | Navigator / Collaborator / Delegator / Apprentice / Beginner |
-| **Project** (configuration) | X.X / 5 | Excellent / Good / Developing / Needs Work / Critical |
+| **You** (interaction patterns) | X.X / 5 | [Profile] |
+| **Project** (configuration) | X.X / 5 | [Excellent / Good / Developing / Needs Work / Critical] |
 | **Combined** | X.X / 5 | |
 
 ---
 
 ## User Analysis
 
-**Profile**: [Capability level] — [1–2 sentence characterisation]
+**Profile**: [Name] — [1–2 sentence characterisation with evidence]
 
-**Log coverage**: [N sessions, N messages, date range, retention period]
+**Evidence base**: [N] sessions | [N] messages | [Date range] | [Retention: X days]
+
+> [If small sample: prominent caveat about confidence levels and which scores are provisional]
 
 ### Scores
 
-| Dimension | Score |
-|---|---|
-| Prompt Clarity & Specificity | X/5 |
-| Context Provision | X/5 |
-| Goal-Setting & Autonomy | X/5 |
-| Iterative Efficiency | X/5 |
-| Feedback Quality | X/5 |
-| Feature Utilisation | X/5 |
-| Domain Vocabulary | X/5 |
+| Dimension | Score | Confidence |
+|---|---|---|
+| Prompt Clarity & Specificity | X/5 | High/Med/Low |
+| Context Provision | X/5 | |
+| Goal-Setting & Success Criteria | X/5 | |
+| Autonomy Depth & Agent Utilisation | X/5 | |
+| Feedback Quality & Iteration | X/5 | |
+| Output Quality Standards | X/5 | |
+| Feature Utilisation | X/5 | |
+| Domain Vocabulary | X/5 | |
 
-### Strengths
-1. **[Strength]**: [Evidence with quote]
-2. **[Strength]**: [Evidence with quote]
+### Strengths (with evidence)
+1. **[Title]**: [Evidence + message quote]
+2. **[Title]**: [Evidence + message quote]
 
-### Growth Areas
-1. **[Area]**: [Observed pattern with quote] → **Try**: [concrete alternative]
-2. **[Area]**: [Observed pattern with quote] → **Try**: [concrete alternative]
+### Growth Areas (with evidence and concrete alternatives)
+1. **[Area]**: [Observed pattern + quote] → **Try**: [specific rewrite or behaviour change]
+2. **[Area]**: [...]
 
 ---
 
 ## Project Analysis
 
+**Project**: [name] | Standards: [calibrated type]
+
 ### Scores
 
-| Dimension | Score |
-|---|---|
-| CLAUDE.md Quality | X/5 |
-| Skills & Workflow Automation | X/5 |
-| CI/CD Integration | X/5 |
-| Documentation Quality | X/5 |
-| Settings & Configuration | X/5 |
+| Dimension | Score | Status | Note |
+|---|---|---|---|
+| CLAUDE.md Quality | X/5 | ✅/⚠️/❌ | [calibration note] |
+| Skills & Workflow Automation | X/5 | | |
+| CI/CD Integration | X/5 or N/A | | |
+| Documentation Quality | X/5 | | |
+| Agent Team Readiness | X/5 | | |
+| Production Posture | X/5 or N/A | | |
 
 ### What's Working
-[1–2 things configured well]
+[2–3 specific strengths with concrete evidence]
 
-### Critical Gaps (ordered by impact)
-1. **[Gap]**: [Why it matters]
-2. **[Gap]**: [Why it matters]
-3. **[Gap]**: [Why it matters]
+### Critical Gaps (impact-ordered, with effort estimate)
+1. **[Gap]** (Effort: Low/Medium/High) — [Why it matters for this project type]
+2. **[Gap]** (...)
+3. **[Gap]** (...)
 
----
+### Autonomous Agent Readiness Verdict
+> Could a team of Claude agents deliver a tested feature PR without getting stuck?
 
-## Combined Recommendations
-
-*Ranked by impact — start at the top.*
-
-### Immediate (today)
-
-- [ ] **[Action]** — [Why: 1 sentence benefit]
-- [ ] **[Action]** — [Why: 1 sentence benefit]
-- [ ] **[Action]** — [Why: 1 sentence benefit]
-
-### Short-term (this week)
-
-- [ ] **[Action]** — [Description]
-- [ ] **[Action]** — [Description]
-
-### Strategic (ongoing)
-
-- [ ] **[Action]** — [Description]
-- [ ] **[Action]** — [Description]
+**[Yes / Partially / No]** — [specific blockers if any]
 
 ---
 
-### The Interaction–Configuration Connection
+## Combined Priority Recommendations
 
-[1–2 paragraphs on how the user's behaviour patterns and the project's configuration
-gaps reinforce each other — and how fixing both together creates a compounding effect.
-For example: if the user doesn't use CLAUDE.md because there isn't one, fixing the
-project gap directly enables a user behaviour improvement.]
+Ordered by **unlock value** — each item enables the ones below it.
+
+### Fix First (unlocks everything else)
+- [ ] **[Action]** (Effort: X) — Enables: [list of other improvements this makes possible]
+
+### Fix Next (high leverage once first items done)
+- [ ] **[Action]** (Effort: X) — [impact]
+- [ ] **[Action]** (Effort: X) — [impact]
+
+### Strategic (invest when fundamentals are solid)
+- [ ] **[Action]** (Effort: X) — [impact for this project type]
+- [ ] **[Action]** (Effort: X)
+
+---
+
+## Reinforcing Gap Analysis
+
+[2–3 paragraphs identifying how user behaviour and project configuration gaps compound each other.
+Name the specific root cause chain. For example: "Because there is no CLAUDE.md, Claude
+rediscovers project context every session — this explains why user messages tend to front-load
+context re-explanation, which in turn reduces the proportion of sessions that can run autonomously.
+Fixing the CLAUDE.md is the single change that most directly unlocks both the project score and
+the user's iterative efficiency score."]
 
 ---
 
