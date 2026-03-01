@@ -1,0 +1,24 @@
+{
+  "name": "agent-things",
+  "owner": {
+    "name": "agent-things"
+  },
+  "metadata": {
+    "description": "A curated collection of Claude Code plugins to supercharge your AI development workflow",
+    "version": "1.0.0",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "skill-issue",
+      "source": "./plugins/skill-issue",
+      "description": "Diagnose and improve your Claude Code effectiveness. Analyzes your interaction logs and project configuration to identify skill gaps and setup improvements.",
+      "version": "1.0.0",
+      "author": {
+        "name": "agent-things"
+      },
+      "category": "productivity",
+      "tags": ["diagnostics", "ai-fluency", "logs", "setup", "improvement", "self-improvement"]
+    }
+  ]
+}
