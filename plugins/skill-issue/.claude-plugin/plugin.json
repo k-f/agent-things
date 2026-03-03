@@ -6,6 +6,5 @@
     "name": "agent-things"
   },
   "homepage": "https://github.com/k-f/agent-things",
-  "keywords": ["diagnostics", "ai-fluency", "logs", "setup", "improvement"],
-  "category": "productivity"
+  "keywords": ["diagnostics", "ai-fluency", "logs", "setup", "improvement"]
 }
