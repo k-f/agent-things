@@ -10,8 +10,18 @@ allowed-tools: Bash, Read, Glob, Grep
 
 # User Skill Issue — Interaction Log Analysis
 
-You are performing a rigorous, evidence-backed AI-fluency audit of this user's Claude Code
-interaction history. Your output must be honest and calibrated. Do not grade on a curve.
+You are performing an evidence-backed AI-fluency audit of this user's Claude Code interaction history.
+
+**Tone**: Direct and factual. State what the data shows. Do not soften findings or lead with
+positives to buffer criticism. A user reading this report should come away with a clear picture
+of where they actually stand, not a reassuring approximation of it.
+
+**Scoring calibration**:
+- 3 is the baseline — functional usage, not praise-worthy. Most everyday Claude Code users are 3s.
+- 4 requires consistent, clear evidence of deliberate practice. Not just "no obvious problems" — actual evidence of strength.
+- 5 is rare. Reserve it for genuinely exemplary and consistently demonstrated behaviour.
+- If uncertain between two scores, take the lower one. Inflation helps no one.
+- Do not give 4 because something "looks pretty good". Evidence must clearly exceed baseline.
 
 ## Step 1 — Clarify scope
 
@@ -61,6 +71,11 @@ requires full message text. Truncated messages produce misleading scores.
 Read ALL extracted messages thoroughly before scoring anything.
 For each dimension, collect evidence *before* assigning a score.
 Quote actual message text (abbreviated to ~100 chars) to support every rating.
+
+**Before scoring**: remind yourself — 3 is the expected baseline for a working Claude Code user.
+A 4 means the data clearly shows consistent strength above that baseline. A 5 means exemplary.
+If you are about to write a 4, ask: "Is there clear, consistent evidence — or am I just noting the
+absence of problems?" Absence of problems is a 3, not a 4.
 
 ---
 
@@ -303,16 +318,17 @@ not an Orchestrator.
 
 ---
 
-### Strengths (evidence-backed)
+### What the data shows (evidence-backed)
 
-For each strength: title, observation, supporting quote from actual messages.
+For each observation: title, what the pattern is, supporting quote from actual messages.
+Only include genuinely positive signals — not absence of problems.
 
 ---
 
-### Growth Areas (evidence-backed)
+### Gaps (evidence-backed)
 
-For each area: title, observed pattern with evidence, specific rewrite or behaviour change.
-Be concrete — show the before and after.
+For each gap: title, observed pattern with evidence, specific rewrite or behaviour change.
+Be concrete — show the before and after. Name the cost of the current behaviour.
 
 ---
 

@@ -15,8 +15,11 @@ Two analyses run in this same forked context to protect the main conversation wi
 1. **Project skill issues** — how well this project is configured for Claude Code
 2. **User skill issues** — how effectively the user interacts with Claude Code
 
-Both are calibrated to context. A PoC and a regulated production system are judged
-by completely different standards. State your calibration assumptions clearly.
+Both are calibrated to project type. A PoC and a regulated production system are judged
+by different standards. State calibration assumptions explicitly.
+
+**Tone**: Direct and factual. State what the data shows. Do not soften findings or
+lead with praise to buffer criticism. An honest 3 is more useful than a flattering 4.
 
 ---
 
@@ -201,54 +204,85 @@ State sample quality prominently. Adjust score confidence accordingly.
 
 ### B3. Analyse all 8 user dimensions
 
-For each dimension, collect evidence before scoring.
-Quote actual message text to support every rating.
+**Scoring calibration — read before scoring anything:**
+
+> 3 is the baseline. It means functional, not praiseworthy. Most everyday Claude Code users score 3.
+> 4 requires consistent, clear evidence of deliberate practice — not just an absence of bad habits.
+> 5 is rare. Reserve it for behaviour that is genuinely exemplary and consistently demonstrated.
+> If you are uncertain between two scores, take the lower one.
+> Do not give 4 because something "looks pretty good". Give 4 only when the evidence clearly exceeds baseline.
+
+For each dimension, collect evidence before scoring. Quote actual message text to support every rating.
 
 ---
 
 #### Dimension 1: Prompt Clarity & Specificity (1–5)
-- **5**: Unambiguous acceptance criteria on every request; Claude knows exactly when it's done
-- **3**: Mix of clear and vague; occasionally Claude must guess at success criteria
-- **1**: Consistent underspecification; Claude must ask before every action
+
+- **5**: Every request has unambiguous acceptance criteria. Claude knows exactly when it's done without asking. File names, function names, edge cases, and expected output format all stated upfront.
+- **4**: Consistently specific. Clear acceptance criteria on most requests. Occasional minor gap but not a pattern.
+- **3**: Functional clarity — Claude can usually start, but often must infer what "done" means. Some vague requests but not a blocker.
+- **2**: Vague more often than not. Claude regularly has to make assumptions or ask for clarification.
+- **1**: Chronic underspecification. "make it work", "fix this", no success criteria. Claude must ask before every action.
 
 #### Dimension 2: Context Provision (1–5)
-- **5**: All relevant context provided proactively; Claude never has to ask before starting
-- **3**: Sometimes sufficient; sometimes Claude must probe for more
-- **1**: No context; Claude must run discovery on every request
+
+- **5**: Proactively provides everything Claude needs — error messages, stack traces, file paths, constraints, what was already tried. Claude never has to ask before starting.
+- **4**: Usually sufficient. Occasional gap that needs one clarifying question, but not a pattern.
+- **3**: Adequate more often than not. Claude frequently must probe for more or make assumptions, but work proceeds.
+- **2**: Thin context as a habit. Claude often has to run discovery or ask multiple questions before it can begin.
+- **1**: Bare assertions. No diagnostic info, no file paths, no prior attempts. Claude starts from scratch every time.
 
 #### Dimension 3: Goal-Setting & Success Criteria (1–5)
+
 The key question: can Claude know when it's done, without asking?
-- **5**: Goal + explicit measurable success criteria + Claude can self-validate; compatible with 10+ turn autonomous work
-- **3**: Clear goal; success is inferrable but not stated explicitly
-- **1**: Step-by-step instructions; Claude cannot judge completion independently
+
+- **5**: Goal + explicit measurable success criteria + Claude can self-validate completion. Compatible with 10+ turn autonomous sessions. "The tests must all pass and the linter must be clean" not "make it better".
+- **4**: Clear goal, success usually inferrable. Claude rarely needs a check-in to confirm done.
+- **3**: Mostly goals, occasionally explicit tasks. Claude sometimes needs to ask "is this what you meant?" before committing.
+- **2**: Mostly explicit tasks. Claude executes exactly what's specified and waits. No sense of goal or definition of done.
+- **1**: Step-by-step micro-instructions. "Now add this line. Now rename that variable." Claude is a keyboard, not an agent.
 
 #### Dimension 4: Autonomy Depth & Agent Utilisation (1–5)
-- **5**: Agent teams used for large, complex work; agents self-validate; minimal mid-work interruption; production-ready delivery
-- **4**: Subagents used; substantial autonomous sessions; trusts Claude to plan
-- **3**: Autonomous single-agent sessions of moderate length
-- **2**: Mostly single-turn; occasional multi-step delegation
-- **1**: One instruction at a time; Claude is a keyboard
+
+- **5**: Agent teams used for large, complex, multi-file work. Agents self-validate output. Minimal mid-work interruption. Production-ready results delivered autonomously. Clear evidence of parallel agent coordination.
+- **4**: Subagents used and trusted. Substantial autonomous sessions. Delegates whole features or systems, not just functions. Trusts Claude to plan the approach.
+- **3**: Single-agent autonomous sessions for tasks of moderate scope. Some autonomy but still hands-on more often than not.
+- **2**: Mostly single-turn interactions. Occasionally lets Claude do 2–3 steps before checking in.
+- **1**: One instruction at a time. Never delegates. Claude is used as a linter or autocomplete.
 
 #### Dimension 5: Feedback Quality & Iteration (1–5)
-- **5**: Every correction includes specific evidence (test output, error traces); Claude self-corrects
-- **3**: Mix of specific and general feedback
-- **1**: "Try again" with no diagnostic info; or no feedback loop at all
+
+- **5**: Every correction includes specific evidence — test output, error traces, failing assertion, line numbers. Claude can self-correct without further prompting.
+- **4**: Usually specific. The occasional "that didn't work" but overall pattern is diagnostic feedback.
+- **3**: Mixed. Some specific corrections with evidence, some general statements. Claude has to probe half the time.
+- **2**: Mostly general — "that's not right", "try again", "it's broken". Claude must guess what went wrong.
+- **1**: No feedback loop. Either accepts first output regardless of quality, or starts a new session without iterating.
 
 #### Dimension 6: Output Quality Standards (1–5)
-Does the user specify the quality bar? Is it calibrated to context?
-- **5**: Quality requirements explicitly stated and appropriate to context (PoC vs production); requests tests/review/validation at the right level
-- **3**: Implicit quality bar; relies on Claude's judgment
-- **1**: Never specifies quality; or applies the same bar to everything regardless of stakes
+
+Does the user specify the quality bar explicitly, and is it calibrated to context?
+
+- **5**: Quality requirements stated explicitly and calibrated to the work type. "This is a PoC, skip tests" and "This is going to prod, must include error handling and be reviewed" are both 5-level behaviours. The user actively manages the quality dial.
+- **4**: Usually specifies quality. Calibration present most of the time. Occasional implicit assumption but not a habit.
+- **3**: Quality bar mostly implicit — relies on Claude's judgment. Applies similar standards to everything without thought.
+- **2**: Rarely specifies. Claude guesses what standard to apply. Often asks for production quality on PoCs or PoC speed on production work.
+- **1**: Never specifies quality. "make it work" on everything. Quality is whatever Claude defaults to.
 
 #### Dimension 7: Claude Code Feature Utilisation (1–5)
-- **5**: CLAUDE.md maintained; project skills; custom agents; hooks; CI/CD integration; agent teams
-- **3**: CLAUDE.md and/or some skills; mostly manual workflow
-- **1**: Basic chatbot usage; no persistent context; no automation
+
+- **5**: CLAUDE.md maintained and current. Project-scoped skills for all key workflows. Custom agents defined. Hooks in use. Claude integrated in CI/CD. Agent teams used. Claude never has to rediscover context.
+- **4**: CLAUDE.md maintained. Some skills or agents. Limited automation or CI/CD, but clearly investing in the tooling.
+- **3**: CLAUDE.md exists or some skills exist. Mostly manual workflow. Aware of features but uses them inconsistently.
+- **2**: Aware of features but rarely uses them. Occasional `/command` invocation but no sustained investment.
+- **1**: Uses Claude Code as a chatbot. No CLAUDE.md, no skills, no automation, no persistent context.
 
 #### Dimension 8: Domain Vocabulary & Technical Precision (1–5)
-- **5**: Precise domain vocabulary; correct technical terminology; architectural precision
-- **3**: Generally correct; occasional vagueness
-- **1**: Indirect descriptions; avoids technical vocabulary
+
+- **5**: Precise, domain-appropriate vocabulary throughout. References specific APIs, protocols, frameworks, standards by name. Uses architectural vocabulary correctly and consistently.
+- **4**: Mostly precise. Correct terminology as the default with occasional vagueness.
+- **3**: Generally correct terminology. Periodic imprecision that Claude has to interpret but doesn't block progress.
+- **2**: Mixes correct and incorrect terminology. Describes things by analogy more often than by name.
+- **1**: Avoids technical vocabulary almost entirely. Indirect descriptions, no framework or API names.
 
 ---
 
@@ -321,12 +355,11 @@ Common compound patterns to check:
 | Feature Utilisation | X/5 | |
 | Domain Vocabulary | X/5 | |
 
-### Strengths (with evidence)
-1. **[Title]**: [Evidence + message quote]
-2. **[Title]**: [Evidence + message quote]
+### What the data shows (evidence-backed observations)
+For each: what the pattern is, supporting quote, and why it matters.
 
-### Growth Areas (with evidence and concrete alternatives)
-1. **[Area]**: [Observed pattern + quote] → **Try**: [specific rewrite or behaviour change]
+### Gaps (evidence-backed, with concrete alternatives)
+1. **[Area]**: [Observed pattern + quote] → **Change to**: [specific rewrite or behaviour change]
 2. **[Area]**: [...]
 
 ---
@@ -346,10 +379,10 @@ Common compound patterns to check:
 | Agent Team Readiness | X/5 | | |
 | Production Posture | X/5 or N/A | | |
 
-### What's Working
-[2–3 specific strengths with concrete evidence]
+### Observations
+[2–3 specific things the configuration does well — with concrete evidence, not assertions.]
 
-### Critical Gaps (impact-ordered, with effort estimate)
+### Gaps (impact-ordered, with effort estimate)
 1. **[Gap]** (Effort: Low/Medium/High) — [Why it matters for this project type]
 2. **[Gap]** (...)
 3. **[Gap]** (...)

@@ -13,6 +13,12 @@ You are performing a comprehensive audit of this project's Claude Code setup.
 The quality bar must be calibrated to the project type — do not apply production standards
 to a PoC, and do not apply PoC standards to a production system.
 
+**Tone**: Direct and factual. State what is present and what is absent. Do not soften findings.
+An honest 3 is more useful than a flattering 4.
+
+**Scoring calibration**: 3 = functional baseline. 4 requires clear evidence of deliberate investment.
+5 is the complete picture. If uncertain between two scores, take the lower one.
+
 Start by classifying the project. Then audit. Then score.
 
 ---
@@ -277,8 +283,10 @@ State explicitly how calibration affects each score.
 
 | Score | PoC | Internal Tool | Production | Regulated |
 |---|---|---|---|---|
-| 5 | Root file with purpose + commands | Root + key commands + conventions | Root + subdirs + all checklist items + agent operating instructions | Root + subdirs + compliance context + formal conventions + restricted areas |
-| 3 | Root file with purpose | Root file with basic content | Root file, thin on conventions or architecture | Root file only |
+| 5 | Root file with purpose + commands | Root + key commands + conventions + gotchas | Root + subdirs + all checklist items + agent operating instructions | Root + subdirs + compliance context + formal conventions + restricted areas |
+| 4 | Root file with purpose + most commands | Root + commands + conventions; minor gaps | Root + most checklist items; one subdirectory or agent instruction gap | Root + subdirs; missing compliance context or formal change controls |
+| 3 | Root file with purpose only | Root file with basic content | Root file; thin on conventions or architecture | Root file only |
+| 2 | Skeleton / placeholder only | Sparse root file; missing commands or conventions | Root file with purpose but little actionable content | Root file without conventions, restricted areas, or compliance context |
 | 1 | None | None | None | None |
 
 ### Skills & Workflow Automation (1–5, calibrated)
@@ -286,25 +294,31 @@ State explicitly how calibration affects each score.
 | Score | PoC | Internal Tool | Production | Regulated |
 |---|---|---|---|---|
 | 5 | 1–2 useful skills | Skills for 3+ key workflows | Skills for all key workflows + agent team definitions + hooks | Full automation + human-in-loop skills + audit trail hooks |
-| 3 | No skills but not needed | 1–2 basic skills | Skills exist but missing key workflows | Skills exist but no compliance/audit integration |
+| 4 | 1 useful skill | Skills for 2 key workflows | Skills for most workflows; 1–2 gaps in coverage | Skills + hooks; missing audit trail or one human-in-loop gate |
+| 3 | No skills (not needed) | 1 basic skill | Skills exist but missing key workflows | Skills exist but no compliance/audit integration |
+| 2 | No skills (not needed) | Awareness of skills; none configured | 1 skill; most workflows uncovered | 1–2 skills; no hooks or compliance integration |
 | 1 | No skills (acceptable) | No skills | No skills | No skills or hooks |
 
 ### CI/CD Integration (1–5, calibrated)
 
 | Score | PoC | Internal Tool | Production | Regulated |
 |---|---|---|---|---|
-| 5 | Not needed (N/A or 5) | PR review automation | PR review + security scan + test quality + changelog | All Production + compliance check + architecture validation + risk assessment |
-| 3 | Not needed | Basic CI pipeline exists | Claude in CI but limited | Basic Claude CI without compliance |
-| 1 | Not needed | No CI | No Claude in CI | No Claude in CI |
+| 5 | N/A | PR review automation | PR review + security scan + test quality + changelog | All Production + compliance check + architecture validation + risk assessment |
+| 4 | N/A | PR review + one additional automation | PR review + security scan; missing changelog or test quality | Most Production requirements; missing one of: compliance, architecture, risk |
+| 3 | N/A | Basic CI pipeline (not Claude-integrated) | Claude in CI but limited to one workflow | Basic Claude CI; no compliance or risk checks |
+| 2 | N/A | CI exists but no automation or Claude | CI exists but Claude is not involved | CI exists; Claude in one job; no compliance |
+| 1 | N/A | No CI | No CI or no Claude in CI | No Claude in CI |
 
-*Note: For PoC projects, assign N/A or 5 for CI/CD since it is not expected.*
+*Note: For PoC projects, CI/CD is not expected. Score N/A — do not penalise its absence.*
 
 ### Documentation Quality (1–5, calibrated)
 
 | Score | PoC | Internal Tool | Production | Regulated |
 |---|---|---|---|---|
-| 5 | README with purpose | README + setup + basic architecture | README + architecture + API docs + runbook + SECURITY.md | All Production + compliance docs + formal change log |
-| 3 | Brief README | README with setup | Good README, thin on architecture | README, missing compliance docs |
+| 5 | README with purpose + setup | README + setup + basic architecture | README + architecture + API docs + runbook + SECURITY.md | All Production + compliance docs + formal change log |
+| 4 | README with purpose + setup | README + setup + architecture overview | README + architecture; missing runbook or SECURITY.md | All Production docs; missing one compliance doc |
+| 3 | Brief README | README with setup only | Solid README; thin on architecture or ops | README; missing compliance docs |
+| 2 | Placeholder README | Minimal README; no setup | README with purpose; no architecture or ops docs | README only; no compliance docs |
 | 1 | No README | No README | No README | No README |
 
 ### Agent Team Readiness (1–5, calibrated)
@@ -317,19 +331,21 @@ receive a feature spec and deliver it to the point of a human code review, witho
 
 | Score | PoC | Internal Tool | Production | Regulated |
 |---|---|---|---|---|
-| 5 | Not needed | Agents could do a PR end-to-end | Agents deliver tested, documented features autonomously | Agents deliver compliant, audited, tested features with formal handoff |
-| 3 | Not needed | Agent could work on isolated tasks | Agents make progress but get stuck on architecture/convention decisions | Agents work but miss compliance requirements |
-| 1 | Not needed | Agents need prompting at every step | Agents need prompting at every step | Agents need prompting at every step |
+| 5 | N/A | Agents could do a PR end-to-end with no blockers | Agents deliver tested, documented features autonomously | Agents deliver compliant, audited, tested features with formal handoff |
+| 4 | N/A | Agents could complete a PR with 1–2 minor check-ins | Agents deliver tested features; documentation or edge cases need human review | Agents deliver tested features; compliance checks need human sign-off |
+| 3 | N/A | Agents could work on isolated tasks but get stuck on conventions | Agents make progress but get stuck on architecture or convention decisions | Agents work but routinely miss compliance requirements |
+| 2 | N/A | Agents could read the codebase but need guidance to make changes | Agents make changes but require frequent clarification and review | Agents make changes but compliance is not managed |
+| 1 | N/A | Agents need prompting at every step | Agents need prompting at every step | Agents need prompting at every step |
 
 ### Production Posture (1–5 or N/A for PoC)
 
 | Score | What it means |
 |---|---|
-| 5 | Testing with coverage thresholds + security tooling + observability + secrets management + error handling + accessibility + performance testing |
-| 4 | Most of the above; one or two gaps |
-| 3 | Basic testing; some security; limited observability |
-| 2 | Minimal testing; no security tooling; no observability |
-| 1 | No tests; no security; no observability |
+| 5 | Tests with coverage thresholds enforced + security tooling (SAST/SCA) + observability (logging/tracing/alerting) + secrets management + consistent error handling + accessibility + performance measurement |
+| 4 | Tests + most of the above; one clear gap (e.g. no performance testing or no SAST) |
+| 3 | Tests present; some security signals; minimal observability; error handling inconsistent |
+| 2 | Minimal tests (< 10 files or no configuration); no security tooling; no observability |
+| 1 | No tests; no security tooling; no observability; secrets may be in code |
 
 ---
 
@@ -356,8 +372,8 @@ receive a feature spec and deliver it to the point of a human code review, witho
 
 ---
 
-### What's Working Well
-[2–3 specific strengths with concrete evidence. Be specific — "has a CLAUDE.md" is not a strength; "CLAUDE.md covers all 8 checklist items including non-obvious gotchas and agent operating instructions" is.]
+### Observations
+[2–3 specific things the configuration does well — concrete evidence only. "Has a CLAUDE.md" is not an observation; "CLAUDE.md covers all 8 checklist items including non-obvious gotchas and agent operating instructions" is.]
 
 ---
 
