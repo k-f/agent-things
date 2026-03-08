@@ -66,6 +66,20 @@ Do NOT produce a confident-sounding scored report on 3 messages. Surface the lim
 If messages are truncated in the JSON output, re-run with `--max-chars 2000`. Evidence analysis
 requires full message text. Truncated messages produce misleading scores.
 
+## Step 3b — Categorise messages by session role
+
+Before scoring anything, tag each message as one of:
+
+- **Session-opener**: The first or primary goal-setting message in a session. Highest signal for Goal-Setting and Autonomy dimensions — this is how the user frames work before Claude starts.
+- **Mid-session operational**: Follow-up steering within a session ("PR pls", "now run it", "fix the test", "commit and push"). Low-autonomy messages that show how much the user is in Claude's loop.
+- **Feedback/correction**: A message responding to Claude's output with evaluation, error output, or new diagnostic information.
+
+Count the proportion of each type. This proportion directly affects scoring:
+
+- **Goal-Setting** is scored primarily from session-openers. Strong opening briefs do not offset a pattern of operational mid-session steering. If mid-session operationals dominate the message count, Goal-Setting is at most 3 — the user is actively managing each step rather than setting goals and delegating.
+- **Feedback Quality** is scored from feedback/correction messages only. Absence of feedback messages is itself signal (no iteration loop).
+- **Autonomy Depth** looks at the gap between session-opener ambition and mid-session intervention rate.
+
 ## Step 4 — Score against AI Fluency dimensions
 
 Read ALL extracted messages thoroughly before scoring anything.
@@ -268,6 +282,31 @@ Red flags:
 
 ---
 
+## Step 4b — Trend analysis
+
+If the log spans 3+ sessions, compare the **earliest third** of sessions vs the **most recent third**:
+
+- Are session-openers becoming more or less specific and goal-oriented?
+- Is the proportion of mid-session operational messages increasing or decreasing?
+- Is the user introducing new Claude Code features over time?
+- Are feedback messages becoming more diagnostic (with evidence) or remaining general?
+
+State the trend direction plainly: **Improving**, **Stable**, **Declining**, or **Insufficient data**.
+Provide one sentence of evidence for the trend direction.
+
+This appears in the report as a single line — it does not generate new scores, but informs the Priority Recommendations section (e.g., if improving, focus on acceleration; if declining, diagnose the regression).
+
+## Step 4c — Score consistency check
+
+After scoring all 8 dimensions, apply this check before finalising any score:
+
+1. For each dimension, re-read the gap you identified (if any).
+2. If the gap describes a **primary or recurring pattern** — appearing in multiple sessions or the dominant message type — the score for that dimension **must be ≤ 3**.
+3. A score of 4 is only consistent with a gap that is explicitly minor: a single instance, an edge case, not the dominant behaviour.
+4. If your score and your gap contradict each other, lower the score. Do not soften a finding by giving a 4 and naming a large gap. Both cannot be true simultaneously.
+
+**Specific check for Goal-Setting**: If your gaps section names "terse mid-session steering" or "operational follow-up commands" as a primary pattern, Goal-Setting is ≤ 3. An autonomous session opener does not compensate for a session that then requires step-by-step steering to complete.
+
 ## Step 5 — Capability profile
 
 Calculate average score across all 8 dimensions. Map to profile:
@@ -295,6 +334,10 @@ not an Orchestrator.
 **Capability Profile**: [Profile name]
 
 **Evidence base**: [N] sessions | [N] messages | [Date range] | [Retention: X days / not configured]
+
+**Message breakdown**: [N] session-openers | [N] mid-session operational | [N] feedback/correction
+
+**Trend**: [Improving / Stable / Declining / Insufficient data] — [one sentence of evidence]
 
 > [If small sample: add a prominent warning that scores are provisional and specific dimensions
 > cannot be reliably assessed without more data. Be explicit about which scores you are confident

@@ -202,6 +202,22 @@ If messages are still truncated, re-run with `--max-chars 2000`.
 
 State sample quality prominently. Adjust score confidence accordingly.
 
+**Categorise messages by session role before scoring:**
+
+Tag each message as:
+- **Session-opener**: First or primary goal-setting message in a session — highest signal for Goal-Setting and Autonomy.
+- **Mid-session operational**: Follow-up steering within a session ("PR pls", "now run it", "fix the test", "commit and push"). These show how much the user remains in Claude's loop.
+- **Feedback/correction**: Response to Claude's output with evaluation or diagnostic information.
+
+Count the proportion of each type. Scoring implications:
+- **Goal-Setting** is scored from session-openers. If mid-session operationals dominate, Goal-Setting is at most 3.
+- **Feedback Quality** is scored from feedback/correction messages only.
+- **Autonomy Depth** measures the gap between session-opener ambition and mid-session intervention rate.
+
+**Trend analysis (if 3+ sessions):**
+
+Compare the earliest third of sessions vs the most recent third on: opener specificity, proportion of operational mid-session messages, feature usage. State direction as: **Improving / Stable / Declining / Insufficient data** with one sentence of evidence.
+
 ### B3. Analyse all 8 user dimensions
 
 **Scoring calibration — read before scoring anything:**
@@ -286,6 +302,15 @@ Does the user specify the quality bar explicitly, and is it calibrated to contex
 
 ---
 
+**Score consistency check — apply before finalising any score:**
+
+1. For each dimension, re-read the gap you identified (if any).
+2. If the gap describes a **primary or recurring pattern** across multiple sessions or messages, the score for that dimension **must be ≤ 3**.
+3. A score of 4 is only consistent with a gap that is explicitly minor — a single instance, an edge case, not the dominant behaviour.
+4. If score and gap contradict each other, lower the score. Do not give a 4 while naming a large gap for the same dimension.
+
+**Specific check for Goal-Setting**: If "terse mid-session steering" or "operational follow-up commands" is a named gap, Goal-Setting is ≤ 3. A strong session opener does not offset a session that then requires step-by-step steering.
+
 **Capability profile:**
 
 | Profile | Score | What it requires |
@@ -340,6 +365,10 @@ Common compound patterns to check:
 
 **Evidence base**: [N] sessions | [N] messages | [Date range] | [Retention: X days]
 
+**Message breakdown**: [N] session-openers | [N] mid-session operational | [N] feedback/correction
+
+**Trend**: [Improving / Stable / Declining / Insufficient data] — [one sentence of evidence]
+
 > [If small sample: prominent caveat about confidence levels and which scores are provisional]
 
 ### Scores
@@ -378,6 +407,43 @@ For each: what the pattern is, supporting quote, and why it matters.
 | Documentation Quality | X/5 | | |
 | Agent Team Readiness | X/5 | | |
 | Production Posture | X/5 or N/A | | |
+
+### CLAUDE.md Coverage
+
+**REQUIRED — always include this table.**
+
+| Signal | Present? | Quality note |
+|---|---|---|
+| Project purpose and business context | ✅/⚠️/❌ | |
+| Tech stack, key dependencies, version constraints | ✅/⚠️/❌ | |
+| Key commands (build, test, lint, typecheck, deploy, rollback) | ✅/⚠️/❌ | |
+| Coding conventions and style | ✅/⚠️/❌ | |
+| Architecture decisions and their rationale | ✅/⚠️/❌ | |
+| Anti-patterns and protected areas | ✅/⚠️/❌ | |
+| How to run locally | ✅/⚠️/❌ | |
+| How to run tests (unit / integration / e2e separately) | ✅/⚠️/❌ | |
+| Non-obvious gotchas | ✅/⚠️/❌ | |
+| Domain-specific knowledge | ✅/⚠️/❌ | |
+| What NOT to change / protected areas | ✅/⚠️/❌ | |
+| Agent operating instructions | ✅/⚠️/❌ | |
+
+Subdirectory CLAUDE.md files: [list paths, or "none"]
+
+### File Inventory
+
+**REQUIRED — always include this table.**
+
+| Path | Status | Assessment |
+|---|---|---|
+| CLAUDE.md (root) | ✅ / ❌ | [brief] |
+| .claude/settings.json | ✅ / ❌ | |
+| .claude/skills/ | N files | [names or "none"] |
+| .claude/agents/ | N files | [names or "none"] |
+| .github/workflows/ Claude integration | ✅ / ❌ | |
+| Test infrastructure | ✅ / ⚠️ / ❌ | |
+| Security tooling | ✅ / ⚠️ / ❌ | N/A for PoC |
+| Observability | ✅ / ⚠️ / ❌ | N/A for PoC |
+| Accessibility tooling | ✅ / ⚠️ / ❌ | N/A for non-UI |
 
 ### Observations
 [2–3 specific things the configuration does well — with concrete evidence, not assertions.]

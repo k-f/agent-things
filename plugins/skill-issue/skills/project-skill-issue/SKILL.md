@@ -281,45 +281,45 @@ State explicitly how calibration affects each score.
 
 ### CLAUDE.md Quality (1–5, calibrated)
 
-| Score | PoC | Internal Tool | Production | Regulated |
-|---|---|---|---|---|
-| 5 | Root file with purpose + commands | Root + key commands + conventions + gotchas | Root + subdirs + all checklist items + agent operating instructions | Root + subdirs + compliance context + formal conventions + restricted areas |
-| 4 | Root file with purpose + most commands | Root + commands + conventions; minor gaps | Root + most checklist items; one subdirectory or agent instruction gap | Root + subdirs; missing compliance context or formal change controls |
-| 3 | Root file with purpose only | Root file with basic content | Root file; thin on conventions or architecture | Root file only |
-| 2 | Skeleton / placeholder only | Sparse root file; missing commands or conventions | Root file with purpose but little actionable content | Root file without conventions, restricted areas, or compliance context |
-| 1 | None | None | None | None |
+| Score | PoC | Internal Tool | Production | Regulated | Library / Plugin |
+|---|---|---|---|---|---|
+| 5 | Root file with purpose + commands | Root + key commands + conventions + gotchas | Root + subdirs + all checklist items + agent operating instructions | Root + subdirs + compliance context + formal conventions + restricted areas | Root + API conventions + versioning policy + contribution guide + gotchas for consumers |
+| 4 | Root file with purpose + most commands | Root + commands + conventions; minor gaps | Root + most checklist items; one subdirectory or agent instruction gap | Root + subdirs; missing compliance context or formal change controls | Root + conventions + versioning; missing contribution guide or consumer-facing gotchas |
+| 3 | Root file with purpose only | Root file with basic content | Root file; thin on conventions or architecture | Root file only | Root file with purpose + basic commands; thin on API conventions |
+| 2 | Skeleton / placeholder only | Sparse root file; missing commands or conventions | Root file with purpose but little actionable content | Root file without conventions, restricted areas, or compliance context | Sparse root file; missing versioning, API conventions, or commands |
+| 1 | None | None | None | None | None |
 
 ### Skills & Workflow Automation (1–5, calibrated)
 
-| Score | PoC | Internal Tool | Production | Regulated |
-|---|---|---|---|---|
-| 5 | 1–2 useful skills | Skills for 3+ key workflows | Skills for all key workflows + agent team definitions + hooks | Full automation + human-in-loop skills + audit trail hooks |
-| 4 | 1 useful skill | Skills for 2 key workflows | Skills for most workflows; 1–2 gaps in coverage | Skills + hooks; missing audit trail or one human-in-loop gate |
-| 3 | No skills (not needed) | 1 basic skill | Skills exist but missing key workflows | Skills exist but no compliance/audit integration |
-| 2 | No skills (not needed) | Awareness of skills; none configured | 1 skill; most workflows uncovered | 1–2 skills; no hooks or compliance integration |
-| 1 | No skills (acceptable) | No skills | No skills | No skills or hooks |
+| Score | PoC | Internal Tool | Production | Regulated | Library / Plugin |
+|---|---|---|---|---|---|
+| 5 | 1–2 useful skills | Skills for 3+ key workflows | Skills for all key workflows + agent team definitions + hooks | Full automation + human-in-loop skills + audit trail hooks | Skills for add-plugin, test-plugin, validate, release; hooks for validation gates |
+| 4 | 1 useful skill | Skills for 2 key workflows | Skills for most workflows; 1–2 gaps in coverage | Skills + hooks; missing audit trail or one human-in-loop gate | Skills for 2+ key workflows (e.g. add-plugin + test); 1–2 gaps |
+| 3 | No skills (not needed) | 1 basic skill | Skills exist but missing key workflows | Skills exist but no compliance/audit integration | 1 basic skill; most workflows undocumented or manual |
+| 2 | No skills (not needed) | Awareness of skills; none configured | 1 skill; most workflows uncovered | 1–2 skills; no hooks or compliance integration | Awareness of skills; none configured for the project itself |
+| 1 | No skills (acceptable) | No skills | No skills | No skills or hooks | No skills |
 
 ### CI/CD Integration (1–5, calibrated)
 
-| Score | PoC | Internal Tool | Production | Regulated |
-|---|---|---|---|---|
-| 5 | N/A | PR review automation | PR review + security scan + test quality + changelog | All Production + compliance check + architecture validation + risk assessment |
-| 4 | N/A | PR review + one additional automation | PR review + security scan; missing changelog or test quality | Most Production requirements; missing one of: compliance, architecture, risk |
-| 3 | N/A | Basic CI pipeline (not Claude-integrated) | Claude in CI but limited to one workflow | Basic Claude CI; no compliance or risk checks |
-| 2 | N/A | CI exists but no automation or Claude | CI exists but Claude is not involved | CI exists; Claude in one job; no compliance |
-| 1 | N/A | No CI | No CI or no Claude in CI | No Claude in CI |
+| Score | PoC | Internal Tool | Production | Regulated | Library / Plugin |
+|---|---|---|---|---|---|
+| 5 | N/A | PR review automation | PR review + security scan + test quality + changelog | All Production + compliance check + architecture validation + risk assessment | Schema/format validation + compatibility test + PR review + release automation |
+| 4 | N/A | PR review + one additional automation | PR review + security scan; missing changelog or test quality | Most Production requirements; missing one of: compliance, architecture, risk | Schema validation + PR review; missing release automation or compatibility test |
+| 3 | N/A | Basic CI pipeline (not Claude-integrated) | Claude in CI but limited to one workflow | Basic Claude CI; no compliance or risk checks | Basic CI with schema/lint validation; no Claude integration |
+| 2 | N/A | CI exists but no automation or Claude | CI exists but Claude is not involved | CI exists; Claude in one job; no compliance | CI exists but no validation of plugin schemas or manifests |
+| 1 | N/A | No CI | No CI or no Claude in CI | No Claude in CI | No CI |
 
 *Note: For PoC projects, CI/CD is not expected. Score N/A — do not penalise its absence.*
 
 ### Documentation Quality (1–5, calibrated)
 
-| Score | PoC | Internal Tool | Production | Regulated |
-|---|---|---|---|---|
-| 5 | README with purpose + setup | README + setup + basic architecture | README + architecture + API docs + runbook + SECURITY.md | All Production + compliance docs + formal change log |
-| 4 | README with purpose + setup | README + setup + architecture overview | README + architecture; missing runbook or SECURITY.md | All Production docs; missing one compliance doc |
-| 3 | Brief README | README with setup only | Solid README; thin on architecture or ops | README; missing compliance docs |
-| 2 | Placeholder README | Minimal README; no setup | README with purpose; no architecture or ops docs | README only; no compliance docs |
-| 1 | No README | No README | No README | No README |
+| Score | PoC | Internal Tool | Production | Regulated | Library / Plugin |
+|---|---|---|---|---|---|
+| 5 | README with purpose + setup | README + setup + basic architecture | README + architecture + API docs + runbook + SECURITY.md | All Production + compliance docs + formal change log | README + API/interface docs + CONTRIBUTING.md + migration/versioning guide + usage examples |
+| 4 | README with purpose + setup | README + setup + architecture overview | README + architecture; missing runbook or SECURITY.md | All Production docs; missing one compliance doc | README + usage examples + contribution guide; missing migration or versioning guide |
+| 3 | Brief README | README with setup only | Solid README; thin on architecture or ops | README; missing compliance docs | README with setup + basic usage; no contribution guide or versioning policy |
+| 2 | Placeholder README | Minimal README; no setup | README with purpose; no architecture or ops docs | README only; no compliance docs | Minimal README; no usage examples or contribution path |
+| 1 | No README | No README | No README | No README | No README |
 
 ### Agent Team Readiness (1–5, calibrated)
 
@@ -329,13 +329,13 @@ autonomous work in this project without constant human oversight.
 *Ask*: could a team of Claude agents — an explorer, an implementer, a reviewer, and a tester —
 receive a feature spec and deliver it to the point of a human code review, without getting stuck?
 
-| Score | PoC | Internal Tool | Production | Regulated |
-|---|---|---|---|---|
-| 5 | N/A | Agents could do a PR end-to-end with no blockers | Agents deliver tested, documented features autonomously | Agents deliver compliant, audited, tested features with formal handoff |
-| 4 | N/A | Agents could complete a PR with 1–2 minor check-ins | Agents deliver tested features; documentation or edge cases need human review | Agents deliver tested features; compliance checks need human sign-off |
-| 3 | N/A | Agents could work on isolated tasks but get stuck on conventions | Agents make progress but get stuck on architecture or convention decisions | Agents work but routinely miss compliance requirements |
-| 2 | N/A | Agents could read the codebase but need guidance to make changes | Agents make changes but require frequent clarification and review | Agents make changes but compliance is not managed |
-| 1 | N/A | Agents need prompting at every step | Agents need prompting at every step | Agents need prompting at every step |
+| Score | PoC | Internal Tool | Production | Regulated | Library / Plugin |
+|---|---|---|---|---|---|
+| 5 | N/A | Agents could do a PR end-to-end with no blockers | Agents deliver tested, documented features autonomously | Agents deliver compliant, audited, tested features with formal handoff | Agents could add a new plugin, test it, validate manifests, and raise a PR end-to-end |
+| 4 | N/A | Agents could complete a PR with 1–2 minor check-ins | Agents deliver tested features; documentation or edge cases need human review | Agents deliver tested features; compliance checks need human sign-off | Agents could add a plugin but would need guidance on testing or manifest validation |
+| 3 | N/A | Agents could work on isolated tasks but get stuck on conventions | Agents make progress but get stuck on architecture or convention decisions | Agents work but routinely miss compliance requirements | Agents can read the codebase and make isolated changes but stall on plugin conventions or test steps |
+| 2 | N/A | Agents could read the codebase but need guidance to make changes | Agents make changes but require frequent clarification and review | Agents make changes but compliance is not managed | Agents need significant guidance; plugin conventions not executable from docs alone |
+| 1 | N/A | Agents need prompting at every step | Agents need prompting at every step | Agents need prompting at every step | Agents need prompting at every step |
 
 ### Production Posture (1–5 or N/A for PoC)
 
@@ -369,6 +369,29 @@ receive a feature spec and deliver it to the point of a human code review, witho
 | Agent Team Readiness | X/5 | | |
 | Production Posture | X/5 or N/A | | |
 | **Overall** | **X.X / 5** | | |
+
+---
+
+### CLAUDE.md Coverage
+
+**REQUIRED — always include this table.** Fill in every row from the evidence gathered in Step 2.
+
+| Signal | Present? | Quality note |
+|---|---|---|
+| Project purpose and business context | ✅/⚠️/❌ | |
+| Tech stack, key dependencies, version constraints | ✅/⚠️/❌ | |
+| Key commands (build, test, lint, typecheck, deploy, rollback) | ✅/⚠️/❌ | |
+| Coding conventions and style | ✅/⚠️/❌ | |
+| Architecture decisions and their rationale | ✅/⚠️/❌ | |
+| Anti-patterns and protected areas | ✅/⚠️/❌ | |
+| How to run locally | ✅/⚠️/❌ | |
+| How to run tests (unit / integration / e2e separately) | ✅/⚠️/❌ | |
+| Non-obvious gotchas | ✅/⚠️/❌ | |
+| Domain-specific knowledge | ✅/⚠️/❌ | |
+| What NOT to change / protected areas | ✅/⚠️/❌ | |
+| Agent operating instructions | ✅/⚠️/❌ | |
+
+Subdirectory CLAUDE.md files: [list paths found, or "none"]
 
 ---
 
@@ -424,6 +447,8 @@ Identify the dependency order — which fix enables the most other improvements:
 ---
 
 ### File Inventory
+
+**REQUIRED — always include this table.**
 
 | Path | Status | Assessment |
 |---|---|---|
