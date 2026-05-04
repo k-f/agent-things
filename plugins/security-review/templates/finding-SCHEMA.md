@@ -5,21 +5,46 @@ Candidate findings (pre-verification) live under `findings/candidates/<id>.md` w
 but `status: candidate` and may have lower-confidence content. Verifier-rejected findings move to
 `findings/rejected/<id>.md`.
 
-## Required frontmatter
+## Frontmatter
+
+### Required (validate_findings.py errors if missing)
+
+- `id` — `SR-<YYYY>-<NNN>`; chain findings end with `-CHAIN`
+- `title` — one-line headline, ≤80 chars
+- `status` — `candidate` | `confirmed` | `rejected` | `duplicate-of:SR-<id>`
+- `severity` — `critical` | `high` | `medium` | `low` | `info`
+- `cvss_v3_1_vector` — must match the v3.1 vector regex
+- `cvss_v3_1_score` — numeric base score; must match severity band (see below)
+- `cwe`, `owasp_top_10_2021`, `confidence` (0.0–1.0; ≥0.8 reaches the report by default)
+- `discovered_by` — agent name
+- `verified_by` — required when `status: confirmed`
+
+### Recommended (not enforced by validate but expected by report-compiler / index)
+
+- `affected` — list of `{repo, file, lines, function}` blocks (used by INDEX and report tables)
+- `preconditions` — list of attacker reachability assumptions
+- `references` — list of CWE / CVE / OWASP / vendor advisory URLs
+- `tags` — list of short tags for filtering
+
+### Required only on chain findings (`SR-...-CHAIN`)
+
+- `chain_constituents` — non-empty list of SR-IDs that compose the chain
+
+### Full example
 
 ```yaml
 ---
-id: SR-2026-001                       # SR-<YYYY>-<NNN>; chain findings: SR-<YYYY>-<NNN>-CHAIN
+id: SR-2026-001
 title: <one-line headline, ≤80 chars>
-status: confirmed                     # candidate | confirmed | rejected | duplicate-of:SR-2026-002
-severity: high                        # critical | high | medium | low | info
+status: confirmed
+severity: high
 cvss_v3_1_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
-cvss_v3_1_score: 7.5                  # base score; must match severity band
+cvss_v3_1_score: 7.5
 cwe: CWE-89
 owasp_top_10_2021: "A03:2021 — Injection"
-confidence: 0.92                      # 0.0–1.0; only ≥0.8 reach the report by default
+confidence: 0.92
 discovered_by: sr-injection-hunter
-verified_by: sr-verifier              # null on candidates, set on confirmed
+verified_by: sr-verifier              # required when status: confirmed
 affected:
   - repo: services/api                # repo-relative or path-relative
     file: app/routes/users.py
@@ -32,7 +57,8 @@ references:
   - https://cwe.mitre.org/data/definitions/89.html
   - https://owasp.org/Top10/A03_2021-Injection/
 tags: [injection, sql, unauthenticated]
-chain_constituents: []                # only set on SR-...-CHAIN findings; list of constituent SR-IDs
+# chain_constituents only on SR-...-CHAIN findings (omit otherwise):
+# chain_constituents: [SR-2026-002, SR-2026-007]
 ---
 ```
 
@@ -44,9 +70,9 @@ chain_constituents: []                # only set on SR-...-CHAIN findings; list 
 | high | 7.0–8.9 |
 | medium | 4.0–6.9 |
 | low | 0.1–3.9 |
-| info | 0.0 |
+| info | exactly 0.0 |
 
-`validate_findings.py --strict` fails if `severity` doesn't match the `cvss_v3_1_score` band.
+A score of 0.0 → `info`; any score ≥ 0.1 → `low` or higher per the bands above. `validate_findings.py --strict` fails if `severity` doesn't match the `cvss_v3_1_score` band.
 
 ## Required body sections (in this exact order)
 

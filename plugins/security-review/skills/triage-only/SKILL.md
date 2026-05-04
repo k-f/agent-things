@@ -16,7 +16,13 @@ Re-runs phases 6, 6.5, and 7 against an existing run dir. Does not re-run hunter
 
 1. Parse `RUN_ID` from the first argument. Confirm `.security-review/<RUN_ID>/` exists.
 
-2. If a second argument is provided, treat it as the new `PROJECT_TYPE` — overwrite the project type in `calibration.md` (with a timestamped audit note appending the prior value). Example reason: a PoC is being promoted to production and you want to re-tighten the severity bar.
+2. If a second argument is provided, treat it as the new `PROJECT_TYPE`. Per `calibration.md`'s own contract ("If calibration must change, append a new section with timestamp and rationale"), do NOT overwrite the existing project-type line — instead append a new section to `calibration.md`:
+   ```
+   ## Calibration change — <timestamp>
+   Project type changed from `<old>` to `<new>` because <user-supplied reason or "unspecified">.
+   This re-triage applies the new severity bar; prior triage decisions remain in finding history.
+   ```
+   The new project type takes effect for the re-run; the original is preserved as audit history.
 
 3. Run replay audit:
    ```bash

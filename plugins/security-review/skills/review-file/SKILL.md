@@ -14,6 +14,12 @@ Lightweight scoped review. Trades coverage for speed. Use when you want to vet o
 
 ## Procedure
 
+0. Locate plugin scripts (same pattern as the parent skill):
+   ```bash
+   SCRIPT_DIR="${CLAUDE_PLUGIN_ROOT:-}/scripts"
+   [ ! -d "$SCRIPT_DIR" ] && SCRIPT_DIR=$(dirname $(find ~/.claude/plugins -name "init_run.py" -path "*security-review*" 2>/dev/null | head -1))
+   ```
+
 1. Parse argument as `FILE`. Require a file path. Confirm it exists and is a regular file.
 
 2. Determine relevant hunter classes by inspecting the file's content briefly:
@@ -26,7 +32,12 @@ Lightweight scoped review. Trades coverage for speed. Use when you want to vet o
    - If file is a route handler / web framework code: add `sr-authnz-hunter`, `sr-web-hunter`
    - If file implements money / state-machine / permissions: add `sr-businesslogic-hunter`
 
-3. Initialize a minimal run dir using `init_run.py` with `--targets <containing-repo> --depth quick`.
+3. Determine the containing repo (walk up from `FILE` looking for `.git/`). Determine project type: ask the user briefly with the same options as the parent skill, or default to `internal` if they want to skip the question. Initialize a minimal run dir:
+   ```bash
+   RUN_ID=$(python3 "$SCRIPT_DIR/init_run.py" --targets "$REPO_ROOT" \
+                                                --project-type "$PROJECT_TYPE" \
+                                                --depth quick)
+   ```
 
 4. Skip phases 2-3 (no recon, no threat model). Synthesize a minimal recon stub at `recon/<repo>.md` listing just this file as priority 5.
 

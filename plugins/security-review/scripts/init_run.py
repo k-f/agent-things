@@ -31,7 +31,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-VALID_PROJECT_TYPES = {"poc", "internal", "production", "regulated", "safety-critical", "unsure"}
+VALID_PROJECT_TYPES = {"poc", "internal", "production", "regulated", "safety-critical"}
+# Note: "unsure" is a UI affordance for the parent skill only — the manager must resolve it
+# to a concrete type BEFORE calling this script. We refuse "unsure" to keep calibration honest.
 VALID_DEPTHS = {"quick", "standard", "deep", "exhaustive"}
 
 DEPTH_BUDGETS = {

@@ -16,6 +16,19 @@ You are the manager of a 14-agent security review team. Your job is **coordinati
 
 **The user explicitly chose this skill knowing it can run for hours.** Don't ask "are you sure?" — they're sure. Do the work; report progress at phase boundaries.
 
+## Locate plugin scripts (do this once, at start)
+
+```bash
+SCRIPT_DIR="${CLAUDE_PLUGIN_ROOT:-}/scripts"
+# Fallback when running via /plugin install (CLAUDE_PLUGIN_ROOT may not be set):
+if [ ! -d "$SCRIPT_DIR" ]; then
+  SCRIPT_DIR=$(dirname $(find ~/.claude/plugins -name "init_run.py" -path "*security-review*" 2>/dev/null | head -1))
+fi
+[ ! -d "$SCRIPT_DIR" ] && { echo "error: cannot locate security-review scripts"; exit 1; }
+```
+
+Use `$SCRIPT_DIR/<script>.py` everywhere below. Set this once and never re-resolve.
+
 ---
 
 ## 0. Parse arguments
@@ -47,32 +60,34 @@ Ask the user TWO questions before starting:
 > - `deep` (3-12 h, default) — full suite, per-class partitioning by region for diversity
 > - `exhaustive` (12 h+) — `deep` plus extra passes with novel hypothesis seeds
 
-If user picks `unsure` for project type, infer it:
+If user picks `unsure` for project type, infer it BEFORE calling init_run.py — `unsure` is a UI affordance, never persisted:
 ```bash
 ls -1
 cat README.md 2>/dev/null | head -40
 ls Dockerfile docker-compose.yml .github/workflows/ kubernetes/ 2>/dev/null
 grep -r -i "hipaa\|gdpr\|soc2\|pci\|compliance\|regulated" README.md docs/ SECURITY.md 2>/dev/null | head -3
 ```
+Make a concrete choice from `{poc, internal, production, regulated, safety-critical}` and tell the user:
+> "Inferred project type: `<X>` because: <one sentence>. Proceeding."
 
-Persist as `PROJECT_TYPE` and `DEPTH`.
+If you really cannot infer (no docs, no signals), default to `internal` and say so. Never pass `unsure` to `init_run.py`.
+
+Persist as `PROJECT_TYPE` (concrete) and `DEPTH`.
 
 ### Initialize the run
 
 ```bash
-SCRIPT="$CLAUDE_PLUGIN_ROOT/scripts/init_run.py"
-[ ! -f "$SCRIPT" ] && SCRIPT=$(find ~/.claude/plugins -name "init_run.py" -path "*security-review*" 2>/dev/null | head -1)
-
 # Check deps first.
-python3 "$SCRIPT" --check-deps
+python3 "$SCRIPT_DIR/init_run.py" --check-deps
 
 # Initialize.
-RUN_ID=$(python3 "$SCRIPT" --targets "$TARGETS_COMMA_SEPARATED" \
-                            --project-type "$PROJECT_TYPE" \
-                            --depth "$DEPTH" \
-                            --gitignore)
+RUN_ID=$(python3 "$SCRIPT_DIR/init_run.py" --targets "$TARGETS_COMMA_SEPARATED" \
+                                            --project-type "$PROJECT_TYPE" \
+                                            --depth "$DEPTH" \
+                                            --gitignore)
 RUN_DIR=".security-review/$RUN_ID"
 echo "RUN_ID=$RUN_ID"
+echo "RUN_DIR=$RUN_DIR"
 ```
 
 The `--gitignore` flag appends `.security-review/` to each target repo's `.gitignore` (idempotent).
@@ -91,8 +106,11 @@ Then dispatch ALL recon Tasks in parallel (single message, multiple Task tool ca
 
 ```
 Task subagent_type=sr-recon, prompt:
-  Your assignment is in: $RUN_DIR/assignments/recon-<repo>.md
-  Read findings/SCHEMA.md, calibration.md, and your assignment.
+  Run directory: $RUN_DIR
+  All paths in your persona prompt that look like findings/..., recon/..., assignments/...,
+  worklog/..., calibration.md, threat-model.md, targets.md, etc. live UNDER $RUN_DIR/.
+  Your assignment is at $RUN_DIR/assignments/recon-<repo>.md — read it first, then
+  $RUN_DIR/findings/SCHEMA.md and $RUN_DIR/calibration.md.
   Map this repo's attack surface and rank every relevant file 1-5.
   Write your output to $RUN_DIR/recon/<repo>.md.
   Return only: { recon_path, loc, entrypoints, p5_files, summary }.
@@ -104,12 +122,14 @@ Wait for ALL recon Tasks to complete before phase 2b.
 
 ### 2b. Dispatch sr-threat-modeller (single Task)
 
-Write assignment `assignments/threat-model.md`. Dispatch:
+Write assignment `$RUN_DIR/assignments/tm-001.md` (use `tm-` prefix to match the per-class assignment naming convention). Dispatch:
 
 ```
 Task subagent_type=sr-threat-modeller, prompt:
-  Your assignment is in: $RUN_DIR/assignments/threat-model.md
-  Read every $RUN_DIR/recon/*.md, calibration.md, targets.md.
+  Run directory: $RUN_DIR
+  All paths in your persona prompt are under $RUN_DIR/.
+  Your assignment is at $RUN_DIR/assignments/tm-001.md.
+  Read every $RUN_DIR/recon/*.md, $RUN_DIR/calibration.md, $RUN_DIR/targets.md.
   Build the threat model and the hunt-priority queue.
   Write to $RUN_DIR/threat-model.md.
   Return only: { threat_model_path, n_assignments, highest_chain_severity, summary }.
@@ -121,7 +141,7 @@ Update plan.md.
 
 After phase 2 completes:
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/progress.py" --run "$RUN_ID"
+python3 "$SCRIPT_DIR/progress.py" --run "$RUN_ID"
 ```
 
 ---
@@ -171,9 +191,11 @@ While there are pending assignments:
 
 ```
 Task subagent_type=<hunter-name>, prompt:
-  Your assignment is in: $RUN_DIR/assignments/<id>.md
-  Read findings/SCHEMA.md, calibration.md, and your assignment first.
-  Read the relevant $RUN_DIR/recon/<repo>.md and threat-model.md sections.
+  Run directory: $RUN_DIR
+  All paths in your persona prompt are under $RUN_DIR/.
+  Your assignment is at $RUN_DIR/assignments/<id>.md.
+  Read $RUN_DIR/findings/SCHEMA.md, $RUN_DIR/calibration.md, your assignment first.
+  Read the relevant $RUN_DIR/recon/<repo>.md and $RUN_DIR/threat-model.md sections.
   Run the Mythos-style hypothesize-verify loop with the adversarial self-challenge before writing each candidate.
   Write candidate findings to $RUN_DIR/findings/candidates/<assignment-id>-<n>.md.
   Append worklog to $RUN_DIR/worklog/<agent>-<assignment-id>.md.
@@ -185,17 +207,19 @@ Task subagent_type=<hunter-name>, prompt:
 
 4. Regenerate the index every batch:
    ```bash
-   python3 "$CLAUDE_PLUGIN_ROOT/scripts/index_findings.py" --run "$RUN_ID"
-   python3 "$CLAUDE_PLUGIN_ROOT/scripts/progress.py" --run "$RUN_ID"
+   python3 "$SCRIPT_DIR/index_findings.py" --run "$RUN_ID"
+   python3 "$SCRIPT_DIR/progress.py" --run "$RUN_ID"
    ```
 
 ### If an agent returns `partial`
 
-Re-dispatch with a narrower scope (smaller region or fewer must-checks). Update plan.md to show the original row as `done` and the follow-up row as a new entry.
+Mark the original plan.md row as `partial` (not `done` — partial work is incomplete) and append a new row for the narrowed re-dispatch. The phase-transition rule (next phase begins when all rows are `done`/`skipped`/`partial-superseded`) treats `partial` as not-ready unless its successor row reaches `done`. After the successor row completes, change the original row to `partial-superseded`.
 
 ### If an agent fails
 
 Mark plan.md row as `failed`. Investigate the worklog. Common cause: ran out of context. Fix by narrowing scope and re-dispatching.
+
+Track retry count in the row's `Notes` column (e.g. `retry 1/2`). After 2 failures for the same assignment, stop auto-retrying and ask the user whether to skip or further narrow the scope.
 
 ---
 
@@ -205,12 +229,14 @@ Glob `findings/candidates/*.md`. For each candidate, append a verification row t
 
 ```
 Task subagent_type=sr-verifier, prompt:
+  Run directory: $RUN_DIR
+  All paths in your persona prompt are under $RUN_DIR/.
   Your assignment: independently adversarially verify the candidate at:
     $RUN_DIR/findings/candidates/<id>.md
   Do NOT read the hunter's worklog — your value comes from independent reasoning.
-  Read findings/SCHEMA.md and calibration.md.
-  Confirm → write findings/SR-<YYYY>-<NNN>.md (assign next free SR-id).
-  Reject → move to findings/rejected/<id>.md with a Rejection notes section.
+  Read $RUN_DIR/findings/SCHEMA.md and $RUN_DIR/calibration.md.
+  Confirm → write $RUN_DIR/findings/SR-<YYYY>-<NNN>.md (assign next free SR-id by globbing existing files).
+  Reject → move to $RUN_DIR/findings/rejected/<id>.md with a Rejection notes section.
   Downgrade or defer per the procedure in your persona prompt.
   Return: { decision, final_path, final_severity, final_confidence, summary }.
 ```
@@ -219,8 +245,8 @@ Batch parallelism = same as phase 4 (default 5).
 
 After every batch:
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/index_findings.py" --run "$RUN_ID"
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/progress.py" --run "$RUN_ID"
+python3 "$SCRIPT_DIR/index_findings.py" --run "$RUN_ID"
+python3 "$SCRIPT_DIR/progress.py" --run "$RUN_ID"
 ```
 
 Tell the user the running confirmed/rejected counts.
@@ -233,20 +259,23 @@ Single Task:
 
 ```
 Task subagent_type=sr-triage, prompt:
-  Read findings/SR-*.md, calibration.md, INDEX.md.
-  Run dedupe.py, then make merge/split decisions.
+  Run directory: $RUN_DIR
+  All paths in your persona prompt are under $RUN_DIR/.
+  Read $RUN_DIR/findings/SR-*.md, $RUN_DIR/calibration.md, $RUN_DIR/findings/INDEX.md.
+  Run $SCRIPT_DIR/dedupe.py --run <run-id>, then make merge/split decisions.
   Finalize CVSS v3.1 vectors and base scores; ensure severity matches band.
   Apply project-type calibration; record adjustments in each finding's Discovery notes.
-  Re-validate with validate_findings.py --strict.
-  Regenerate INDEX.md.
-  Write triage-summary.md.
+  Re-validate with $SCRIPT_DIR/validate_findings.py --run <run-id> --strict.
+  Regenerate $RUN_DIR/findings/INDEX.md via $SCRIPT_DIR/index_findings.py.
+  Append a "## Triage decisions" section to $RUN_DIR/triage-summary.md (dedupe.py wrote the
+  "## Dedup suggestions" section already — do not overwrite).
   Return: { n_confirmed, n_duplicates, severity_dist, summary }.
 ```
 
 After triage:
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/validate_findings.py" --run "$RUN_ID" --strict
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/progress.py" --run "$RUN_ID"
+python3 "$SCRIPT_DIR/validate_findings.py" --run "$RUN_ID" --strict
+python3 "$SCRIPT_DIR/progress.py" --run "$RUN_ID"
 ```
 
 If validate fails, dispatch sr-triage again with the failures listed in the assignment. Don't proceed to phase 6.5 until validate passes.
@@ -259,10 +288,14 @@ Single Task:
 
 ```
 Task subagent_type=sr-chain-composer, prompt:
-  Read findings/SR-*.md, INDEX.md, threat-model.md, calibration.md.
+  Run directory: $RUN_DIR
+  All paths in your persona prompt are under $RUN_DIR/.
+  Read $RUN_DIR/findings/SR-*.md, $RUN_DIR/findings/INDEX.md,
+       $RUN_DIR/threat-model.md, $RUN_DIR/calibration.md.
   Build the primitive inventory; explore compositions; validate chains.
-  Mint findings/SR-<YYYY>-<NNN>-CHAIN.md per validated chain.
-  Write chains.md summarizing the analysis.
+  Mint $RUN_DIR/findings/SR-<YYYY>-<NNN>-CHAIN.md per validated chain (chain_constituents must
+  list the SR-IDs of the confirmed constituents).
+  Write $RUN_DIR/chains.md summarizing the analysis.
   Return: { chains_minted, chains_explored, chains_md_path, summary }.
 ```
 
@@ -276,10 +309,12 @@ Single Task:
 
 ```
 Task subagent_type=sr-report-compiler, prompt:
-  Run compile_report.py to produce the skeleton.
-  Fill the narrative placeholders (executive summary, methodology paragraph, risk acceptance,
-  suppression counts, project-specific coverage gaps) per your persona prompt.
-  Final report at $RUN_DIR/report.md.
+  Run directory: $RUN_DIR
+  All paths in your persona prompt are under $RUN_DIR/.
+  Run: python3 $SCRIPT_DIR/compile_report.py --run <run-id>
+  Then edit $RUN_DIR/report.md to fill the narrative placeholders (executive summary,
+  methodology paragraph, risk acceptance, suppression counts, project-specific coverage gaps)
+  per your persona prompt.
   Return: { report_path, n_findings_reported, n_chains_reported, summary }.
 ```
 
@@ -315,10 +350,18 @@ If the argument starts with `resume:`:
 
 2. Run replay audit:
    ```bash
-   python3 "$CLAUDE_PLUGIN_ROOT/scripts/replay.py" --run "$RUN_ID" --check-consistency
+   python3 "$SCRIPT_DIR/replay.py" --run "$RUN_ID" --check-consistency
    ```
 
-3. Read `plan.md`. For each row whose status is `pending`, `running`, or `failed`, re-dispatch using the same dispatch logic as the original phase. If the assignment file already exists, reuse it. If the agent's output file already exists from a partial prior run, the agent will overwrite — that's intended.
+3. Read `plan.md`. For each row whose status is `pending`, `running`, `partial`, or `failed`, re-dispatch using the same dispatch logic as the original phase. If the assignment file already exists, reuse it.
+
+   **Clear stale outputs before re-dispatching a hunter row.** The hunter writes `findings/candidates/<assignment-id>-<n>.md` files; a partial prior run may have written some of those, and a re-dispatch with a different hypothesis seed may produce a different set. Before re-dispatch:
+   ```bash
+   rm -f $RUN_DIR/findings/candidates/<assignment-id>-*.md
+   ```
+   This is safe because every candidate file is named deterministically from the assignment id, and any candidate already promoted to `findings/SR-<NNN>.md` (post-verification) is preserved.
+
+   Verifier rows are idempotent (they're keyed to a specific candidate file). Triage / chain-composer / report-compiler rows are also idempotent — re-running them rewrites the same outputs.
 
 4. Continue through phases 4-7 as normal.
 
@@ -333,8 +376,8 @@ If the argument starts with `resume:`:
 | 1 | Ask 2 Qs, run init_run.py | After init |
 | 2 | Dispatch sr-recon × N parallel; then sr-threat-modeller × 1 | After all recon AND threat-model done |
 | 3 | Read threat-model; write assignments/*.md; append plan rows | Atomic — no Tasks dispatched |
-| 4 | Dispatch hunters in batches of 5, by priority | After all hunter rows done |
-| 5 | Dispatch sr-verifier × N candidates, batches of 5 | After all verifier rows done |
+| 4 | Dispatch hunters in batches (size from calibration.md, default 5), by priority | After all hunter rows done/skipped/partial-superseded |
+| 5 | Dispatch sr-verifier × N candidates, same batch size | After all verifier rows done |
 | 6 | Dispatch sr-triage × 1 | validate_findings --strict passes |
 | 6.5 | Dispatch sr-chain-composer × 1 | After return |
 | 7 | Dispatch sr-report-compiler × 1 | report.md written |

@@ -135,7 +135,7 @@ def main() -> int:
 
     if args.check_schema:
         print(f"check-schema: parsed {len(findings)} findings", file=sys.stderr)
-        return 0 if findings or True else 2
+        return 0
 
     findings.sort(key=lambda f: (severity_rank(f["severity"]), f["id"]))
 

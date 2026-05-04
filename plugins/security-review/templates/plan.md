@@ -31,12 +31,15 @@ row whose status is `pending`, `running`, or `failed`.
 - `pending` — not yet dispatched
 - `running` — dispatched, awaiting return
 - `done` — completed successfully
-- `failed` — Task returned with error; investigate worklog before re-dispatch
+- `partial` — agent returned with status `partial` (ran out of context or scope too large); a successor row was appended for the narrowed re-dispatch
+- `partial-superseded` — successor row reached `done`; this row's incomplete work is now covered
+- `failed` — Task returned with error; investigate worklog before re-dispatch (track retries in Notes column, max 2 auto-retries)
 - `skipped` — phase was skipped per scope (e.g. no crypto in repo → sr-crypto-hunter skipped)
 
 ## Phase transition rules
 
-- Phase N+1 can only begin when ALL rows in phase N have status `done` or `skipped`.
+- Phase N+1 can only begin when ALL rows in phase N have status `done`, `skipped`, or `partial-superseded`.
+- A `partial` row blocks transition until its successor reaches `done` (then both are advanced — the original to `partial-superseded`).
 - Phase 4 rows may be added incrementally during phase 3 distribution; manager must finalize the
   assignment list before dispatching the first phase-4 Task.
 - Phase 5 rows are added one-per-candidate as candidates appear in `findings/candidates/`.

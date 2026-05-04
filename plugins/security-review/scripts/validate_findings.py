@@ -29,6 +29,10 @@ REQUIRED_FRONTMATTER_KEYS = {
     "id", "title", "status", "severity", "cvss_v3_1_vector", "cvss_v3_1_score",
     "cwe", "owasp_top_10_2021", "confidence", "discovered_by",
 }
+# Note: `affected`, `preconditions`, `references`, `tags`, `verified_by`, `chain_constituents`
+# are recommended but not strictly required (see finding-SCHEMA.md "Optional fields"); validate
+# does not error on their absence. `verified_by` is required for `status: confirmed`, enforced
+# inline below.
 REQUIRED_SECTIONS = [
     "## Summary",
     "## Detailed description",
@@ -100,6 +104,9 @@ def validate_one(path: Path) -> Tuple[str, List[str]]:
     missing = REQUIRED_FRONTMATTER_KEYS - fm.keys()
     if missing:
         msgs.append(f"missing frontmatter keys: {sorted(missing)}")
+    # `verified_by` required when status is confirmed.
+    if fm.get("status", "").lower() == "confirmed" and not fm.get("verified_by"):
+        msgs.append("status=confirmed but verified_by is missing")
 
     # CVSS vector
     vec = fm.get("cvss_v3_1_vector", "")
@@ -145,6 +152,32 @@ def validate_one(path: Path) -> Tuple[str, List[str]]:
         section = body[vtp_idx:next_idx if next_idx > 0 else None]
         if len(section.strip()) < 200:
             msgs.append("verification test plan too short (< 200 chars); needs concrete steps")
+
+    # Chain findings must list constituents.
+    fid = fm.get("id", "")
+    if fid.endswith("-CHAIN"):
+        # chain_constituents may be a YAML list — re-scan frontmatter raw text.
+        raw_fm = text[3:text.find("\n---", 3)] if text.startswith("---") else ""
+        in_cc = False
+        any_constituent = False
+        for line in raw_fm.splitlines():
+            s = line.strip()
+            if s.startswith("chain_constituents:"):
+                in_cc = True
+                # inline form: chain_constituents: [SR-2026-001, SR-2026-002]
+                inline = s.split(":", 1)[1].strip()
+                if inline.startswith("[") and "]" in inline:
+                    inner = inline[1:inline.find("]")].strip()
+                    if inner and inner not in ("", "[]"):
+                        any_constituent = True
+                continue
+            if in_cc:
+                if line.startswith("  -") or line.startswith("\t-") or line.startswith("- "):
+                    any_constituent = True
+                elif line and not line.startswith(" ") and not line.startswith("\t"):
+                    in_cc = False
+        if not any_constituent:
+            msgs.append("CHAIN finding has empty chain_constituents list")
 
     if any("missing" in m or "malformed" in m or "out of range" in m for m in msgs):
         return "fail", msgs

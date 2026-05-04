@@ -10,9 +10,15 @@ allowed-tools: Bash, Read, Glob, Grep, Write, Edit, Task
 
 # Security Review — diff-scoped
 
-Reviews only what's changed in a git diff range. Default range is `main..HEAD`. This is the closest analogue of the public claude-code-security-review GitHub Action — keep the manta: "better to miss some theoretical issues than flood the report with false positives."
+Reviews only what's changed in a git diff range. Default range is `main..HEAD`. This is the closest analogue of the public claude-code-security-review GitHub Action — keep the mantra: "better to miss some theoretical issues than flood the report with false positives."
 
 ## Procedure
+
+0. Locate plugin scripts:
+   ```bash
+   SCRIPT_DIR="${CLAUDE_PLUGIN_ROOT:-}/scripts"
+   [ ! -d "$SCRIPT_DIR" ] && SCRIPT_DIR=$(dirname $(find ~/.claude/plugins -name "init_run.py" -path "*security-review*" 2>/dev/null | head -1))
+   ```
 
 1. Parse arguments. Defaults: `BASE=main`, `HEAD=HEAD`. Override from positional args.
 
@@ -29,7 +35,12 @@ Reviews only what's changed in a git diff range. Default range is `main..HEAD`. 
 
 4. If no files changed (after exclusions), tell the user and exit.
 
-5. Initialize a minimal run dir with `init_run.py --targets . --depth quick`.
+5. Determine project type: ask the user briefly (poc / internal / production / regulated / safety-critical), or default to `internal` if they want to skip. Initialize a minimal run dir:
+   ```bash
+   RUN_ID=$(python3 "$SCRIPT_DIR/init_run.py" --targets . \
+                                                --project-type "$PROJECT_TYPE" \
+                                                --depth quick)
+   ```
 
 6. Synthesize recon: list all changed files at priority 5 (every changed line gets full attention), and any file that imports / is imported by changed files at priority 3.
 
@@ -52,8 +63,7 @@ Reviews only what's changed in a git diff range. Default range is `main..HEAD`. 
 
 ## Output
 
-Print the report inline. Additionally:
-- If the user is in a CI context (env `CI=true`), also write JSON output to `.security-review/<run-id>/findings.json` for tool integration. Each line is one finding's frontmatter as JSON.
+Print the report inline. The full markdown report is at `.security-review/<run-id>/report.md`; per-finding files are at `.security-review/<run-id>/findings/SR-*.md` for downstream tooling that wants to parse them directly.
 
 ## Pre-existing-issue rule
 

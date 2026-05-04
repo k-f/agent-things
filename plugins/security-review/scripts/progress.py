@@ -67,7 +67,10 @@ def count_phase(rows: List[Dict[str, str]]) -> Dict[str, Dict[str, int]]:
     for r in rows:
         phase = r.get("Phase", "?")
         status = r.get("Status", "?").lower()
-        d = phases.setdefault(phase, {"pending": 0, "running": 0, "done": 0, "failed": 0, "skipped": 0})
+        d = phases.setdefault(phase, {
+            "pending": 0, "running": 0, "done": 0, "failed": 0,
+            "skipped": 0, "partial": 0, "partial-superseded": 0,
+        })
         if status in d:
             d[status] += 1
     return phases
@@ -105,16 +108,17 @@ def render(run_dir: Path) -> str:
     # Phase summary
     out.append("## Phase summary")
     out.append("")
-    out.append("| Phase | pending | running | done | failed | skipped |")
-    out.append("|---|---|---|---|---|---|")
+    out.append("| Phase | pending | running | done | partial | failed | skipped |")
+    out.append("|---|---|---|---|---|---|---|")
     for phase in sorted(phases.keys(), key=lambda p: (str(p),)):
         d = phases[phase]
+        partial_total = d.get("partial", 0) + d.get("partial-superseded", 0)
         out.append(
             f"| {phase} | {d['pending']} | {d['running']} | "
-            f"{d['done']} | {d['failed']} | {d['skipped']} |"
+            f"{d['done']} | {partial_total} | {d['failed']} | {d['skipped']} |"
         )
     if not phases:
-        out.append("| _(no rows yet)_ | | | | | |")
+        out.append("| _(no rows yet)_ | | | | | | |")
     out.append("")
 
     # Findings counts
