@@ -19,6 +19,17 @@
       },
       "category": "productivity",
       "tags": ["diagnostics", "ai-fluency", "logs", "setup", "improvement", "self-improvement"]
+    },
+    {
+      "name": "security-review",
+      "source": "./plugins/security-review",
+      "description": "Deep, agent-team-driven security review of one or more codebases. Coordinates a 14-agent team over a 7-phase workflow with adversarial verification and exploit-chain composition. Designed for Opus 4.7 with the 1M context window. Resumable; produces a vulnerability report with CVSS v3.1 scores and per-finding human verification test plans.",
+      "version": "0.1.0",
+      "author": {
+        "name": "agent-things"
+      },
+      "category": "security",
+      "tags": ["security", "vulnerability", "cvss", "agent-team", "review", "audit", "appsec", "threat-model"]
     }
   ]
 }

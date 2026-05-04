@@ -1,0 +1,10 @@
+{
+  "name": "security-review",
+  "description": "Deep, agent-team-driven security review of one or more codebases. Coordinates a team of 14 specialized agents (recon, threat-modelling, vulnerability hunters, adversarial verifier, triage, chain-composer, report compiler) over a 7-phase workflow. Designed for Opus 4.7 with the 1M context window and very large inference budgets. State and progress are persisted to .security-review/<run-id>/ as markdown so reviews can run for hours and resume after interruption. Produces a vulnerability report with CVSS v3.1 scores, exploit scenarios, suggested remediations, and a concrete verification test plan per finding.",
+  "version": "0.1.0",
+  "author": {
+    "name": "agent-things"
+  },
+  "homepage": "https://github.com/k-f/agent-things",
+  "keywords": ["security", "vulnerability", "cvss", "agent-team", "review", "audit", "appsec", "sast", "threat-model"]
+}
