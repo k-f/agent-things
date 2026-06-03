@@ -26,15 +26,21 @@ spawn Haiku subagents for the judgement calls (tags, summary, outcome verdict).
 **Granularity is the session. Cost is per session, per model — never collapsed
 to one model and never apportioned across stages within a session.**
 
-`$SKILL_DIR` below = the directory containing this SKILL.md. Resolve it once:
+`$SKILL_DIR` below = the directory containing this SKILL.md. Resolve it once,
+preferring the user-level install under `~/.claude/` and falling back to a
+project-level `.claude/`:
 
 ```bash
-SKILL_DIR="$(dirname "$(find ~ /root -path '*/cc-usage-classifier/SKILL.md' 2>/dev/null | head -1)")"
-# Fallback if the skill is installed elsewhere; otherwise set it from the path
-# Claude Code reported when loading this skill.
+SKILL_DIR=""
+for base in "$HOME/.claude" ".claude"; do
+  hit="$(find "$base" -path '*/cc-usage-classifier/SKILL.md' 2>/dev/null | head -1)"
+  if [ -n "$hit" ]; then SKILL_DIR="$(dirname "$hit")"; break; fi
+done
+echo "SKILL_DIR=$SKILL_DIR"
 ```
 
-If that lookup is empty, use the absolute path of the folder this file lives in.
+If both lookups come up empty, use the absolute path of the folder this file
+lives in (the path Claude Code reported when loading this skill).
 
 ---
 
