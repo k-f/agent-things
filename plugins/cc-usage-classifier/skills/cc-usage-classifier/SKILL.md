@@ -48,8 +48,10 @@ The cost numbers are only meaningful if `pricing.json` has real rates.
    whether to proceed anyway or pause so they can edit it. Do **not** invent
    rates. If they want public list prices, offer to fill them but get
    confirmation of the exact figures first.
-3. Note which model families appear in their data may need adding as keys
-   (the engine matches `claude-opus-4-8` → `claude-opus-4-x`, etc.).
+3. Note any model ids in their data that aren't priced (the engine matches
+   version-specific keys first — exact id, then date-stripped version, then a
+   coarse `claude-<family>-<major>-x` fallback). Versions matter: e.g. Opus
+   4.5–4.8 are a different tier from Opus 4.0/4.1, so don't price by family.
 
 ---
 

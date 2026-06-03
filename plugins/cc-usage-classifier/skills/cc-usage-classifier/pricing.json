@@ -1,25 +1,18 @@
 {
-  "_comment": "Per-model pricing, USD per MILLION tokens. Values below are Anthropic's standard published list prices (5m cache write = 1.25x input, 1h cache write = 2x input, cache read = 0.1x input). VERIFY against your own plan/contract and your exact model tier (e.g. Sonnet's >200K-context tier is priced higher) before trusting the cost figures. Keys are matched to a session's model ids first by EXACT id (e.g. 'claude-opus-4-8'), then by family normalisation ('claude-opus-4-8' -> 'claude-opus-4-x'). Unpriced models are warned about and left at $0.00 — never priced as another model. If your transcripts lack the 5m/1h cache split, cache_write tokens fall back to the cache_write_5m rate.",
+  "_comment": "Per-model pricing, USD per MILLION tokens, from Anthropic's published list prices (claude.com/pricing). Keys are VERSION-SPECIFIC on purpose: within a major version the tier can change (Opus 4.5-4.8 are $5/$25, but Opus 4.0/4.1 are $15/$75), so a coarse 'claude-opus-4-x' would misprice. A session's model id is matched most-specific-first: exact id, then date-stripped version (claude-haiku-4-5-20251001 -> claude-haiku-4-5), then the coarse 'claude-<family>-<major>-x' fallback. Unpriced models are warned about and left at $0.00 — never priced as another model. Cache columns follow the standard multipliers (5m write = 1.25x input, 1h write = 2x input, read = 0.1x input). Verify against your own plan/tier (e.g. fast mode, batch, data-residency, and Sonnet's >200K-context tier differ).",
   "_token_types": "input, output, cache_read, cache_write_5m, cache_write_1h",
-  "claude-opus-4-x": {
-    "input": 15.0,
-    "output": 75.0,
-    "cache_write_5m": 18.75,
-    "cache_write_1h": 30.0,
-    "cache_read": 1.5
-  },
-  "claude-sonnet-4-x": {
-    "input": 3.0,
-    "output": 15.0,
-    "cache_write_5m": 3.75,
-    "cache_write_1h": 6.0,
-    "cache_read": 0.3
-  },
-  "claude-haiku-4-x": {
-    "input": 1.0,
-    "output": 5.0,
-    "cache_write_5m": 1.25,
-    "cache_write_1h": 2.0,
-    "cache_read": 0.1
-  }
+
+  "claude-opus-4-8": {"input": 5.0, "output": 25.0, "cache_write_5m": 6.25, "cache_write_1h": 10.0, "cache_read": 0.5},
+  "claude-opus-4-7": {"input": 5.0, "output": 25.0, "cache_write_5m": 6.25, "cache_write_1h": 10.0, "cache_read": 0.5},
+  "claude-opus-4-6": {"input": 5.0, "output": 25.0, "cache_write_5m": 6.25, "cache_write_1h": 10.0, "cache_read": 0.5},
+  "claude-opus-4-5": {"input": 5.0, "output": 25.0, "cache_write_5m": 6.25, "cache_write_1h": 10.0, "cache_read": 0.5},
+  "claude-opus-4-1": {"input": 15.0, "output": 75.0, "cache_write_5m": 18.75, "cache_write_1h": 30.0, "cache_read": 1.5},
+  "claude-opus-4":   {"input": 15.0, "output": 75.0, "cache_write_5m": 18.75, "cache_write_1h": 30.0, "cache_read": 1.5},
+
+  "claude-sonnet-4-6": {"input": 3.0, "output": 15.0, "cache_write_5m": 3.75, "cache_write_1h": 6.0, "cache_read": 0.3},
+  "claude-sonnet-4-5": {"input": 3.0, "output": 15.0, "cache_write_5m": 3.75, "cache_write_1h": 6.0, "cache_read": 0.3},
+  "claude-sonnet-4":   {"input": 3.0, "output": 15.0, "cache_write_5m": 3.75, "cache_write_1h": 6.0, "cache_read": 0.3},
+
+  "claude-haiku-4-5": {"input": 1.0, "output": 5.0, "cache_write_5m": 1.25, "cache_write_1h": 2.0, "cache_read": 0.1},
+  "claude-3-5-haiku": {"input": 0.8, "output": 4.0, "cache_write_5m": 1.0, "cache_write_1h": 1.6, "cache_read": 0.08}
 }

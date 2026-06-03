@@ -24,28 +24,44 @@ RATE_FALLBACK = {"cache_write": "cache_write_5m"}
 DEFAULT_PRICING = Path(__file__).resolve().parent.parent / "pricing.json"
 
 
-def normalize_model(model_id):
-    """Map a concrete model id to a pricing family key.
+def strip_date_suffix(model_id):
+    """Drop a trailing release-date suffix, keeping the version.
 
-    claude-opus-4-8            -> claude-opus-4-x
-    claude-sonnet-4-6          -> claude-sonnet-4-x
-    claude-haiku-4-5-20251001  -> claude-haiku-4-x
+    claude-haiku-4-5-20251001 -> claude-haiku-4-5
+    claude-opus-4-8           -> claude-opus-4-8  (no date suffix)
     """
-    if not model_id:
-        return model_id
-    m = re.match(r"(claude-(?:opus|sonnet|haiku))-(\d+)", model_id)
-    if m:
-        return f"{m.group(1)}-{m.group(2)}-x"
-    return model_id
+    return re.sub(r"-\d{6,}$", "", model_id or "")
+
+
+def family_key(model_id):
+    """Coarse '<family>-<major>-x' fallback (use only as a last resort).
+
+    NOTE: within a major version, price tiers can differ (e.g. Opus 4.1 is
+    $15/$75 but Opus 4.5+ is $5/$25), so this is intentionally the LAST key
+    tried — define version-specific keys to price accurately.
+    """
+    m = re.match(r"(claude-(?:opus|sonnet|haiku))-(\d+)", model_id or "")
+    return f"{m.group(1)}-{m.group(2)}-x" if m else None
+
+
+def candidate_keys(model_id):
+    """Pricing keys to try, most specific first."""
+    keys = []
+    for k in (model_id, strip_date_suffix(model_id), family_key(model_id)):
+        if k and k not in keys:
+            keys.append(k)
+    return keys
 
 
 def lookup_rates(model_id, pricing):
-    """Return (rates_dict, matched_key) or (None, None) if unpriced."""
-    if model_id in pricing and isinstance(pricing[model_id], dict):
-        return pricing[model_id], model_id
-    norm = normalize_model(model_id)
-    if norm in pricing and isinstance(pricing[norm], dict):
-        return pricing[norm], norm
+    """Return (rates_dict, matched_key) or (None, None) if unpriced.
+
+    Tries the exact id, then the date-stripped version, then the coarse
+    family key. Version-specific keys therefore win over family fallbacks.
+    """
+    for key in candidate_keys(model_id):
+        if key in pricing and isinstance(pricing[key], dict):
+            return pricing[key], key
     return None, None
 
 
