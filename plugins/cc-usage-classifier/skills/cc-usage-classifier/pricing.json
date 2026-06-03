@@ -1,0 +1,25 @@
+{
+  "_comment": "Per-model custom pricing, USD per MILLION tokens. Fill in your own negotiated/published rates. Keys are matched to a session's model ids first by EXACT id (e.g. 'claude-opus-4-8'), then by family normalisation ('claude-opus-4-8' -> 'claude-opus-4-x'). Unpriced models are warned about and left at $0.00 — never priced as another model. If your transcripts lack the 5m/1h cache split, cache_write tokens fall back to the cache_write_5m rate.",
+  "_token_types": "input, output, cache_read, cache_write_5m, cache_write_1h",
+  "claude-opus-4-x": {
+    "input": 0.0,
+    "output": 0.0,
+    "cache_write_5m": 0.0,
+    "cache_write_1h": 0.0,
+    "cache_read": 0.0
+  },
+  "claude-sonnet-4-x": {
+    "input": 0.0,
+    "output": 0.0,
+    "cache_write_5m": 0.0,
+    "cache_write_1h": 0.0,
+    "cache_read": 0.0
+  },
+  "claude-haiku-4-x": {
+    "input": 0.0,
+    "output": 0.0,
+    "cache_write_5m": 0.0,
+    "cache_write_1h": 0.0,
+    "cache_read": 0.0
+  }
+}
