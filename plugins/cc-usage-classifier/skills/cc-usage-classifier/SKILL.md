@@ -196,9 +196,59 @@ deterministic fallback), applies **per-model** pricing, and writes:
 
 Check `/tmp/cc_report.err` for `WARNING: unpriced model` lines and surface them.
 
+`report.py` leaves an empty **`## Insights & assessment`** section at the end of
+`summary.md`, bounded by `<!-- INSIGHTS:START -->` / `<!-- INSIGHTS:END -->`.
+You fill it in next.
+
 ---
 
-## Step 4 — Report back
+## Step 4 — Write data-driven insights into the report
+
+Now `Read` `$OUT_DIR/sessions.csv` (one row per session: `tags`, `outcome`,
+`outcome_confidence`, `models_used`, `session_cost_usd`, `repo`, `skills`,
+`subagents_used`, `day`, …) and the tables already in `$OUT_DIR/summary.md`.
+Synthesise concise insights and **replace the text between the
+`<!-- INSIGHTS:START -->` and `<!-- INSIGHTS:END -->` markers** in
+`summary.md` (use `Edit`; keep the markers).
+
+Write 4 short subsections. **Every claim must cite a number from the data**
+(session counts, $ amounts, percentages, model ids) — no generic advice.
+
+1. **What work is being done** — the dominant activity tags and how they relate
+   (e.g. "debugging + testing co-occur in N sessions"); which repos/tags
+   concentrate spend. Use the by-tag table but restate it as prose, and respect
+   that tags are **non-additive**.
+2. **Models being used** — the per-model token/cost split; which model carries
+   most spend; subagent (Haiku) vs main-agent (Sonnet/Opus) usage if present.
+3. **Value / ROI assessment, factoring in model choice** — this is the point.
+   Judge whether the model tier fits the work and outcome. Look for:
+   - **Over-powered work**: expensive-tier sessions (e.g. Opus 4.x at $5–15/MTok
+     input) spent on low-complexity tags (`documentation`, `analysis/design`,
+     `research`, simple Q&A) that a cheaper tier (Sonnet/Haiku) likely handles —
+     quantify the $ at stake and name the candidate downgrade.
+   - **Low-return spend**: sessions with high cost but `abandoned`/`partial`
+     outcomes, or expensive sessions with low `outcome_confidence` — call out
+     the wasted $.
+   - **Good fit / high return**: expensive models on hard work
+     (`debugging`, `implementation`, `refactor`) that ended `successful`, or
+     cheap models doing a lot — affirm these.
+   - **Appropriately matched**: note where tier and work align so the user
+     isn't told to change something that's fine.
+   Frame ROI as *value delivered relative to model cost*, and be **calibrated**:
+   a one-off $0.50 session is not worth optimising; a recurring pattern of
+   $X across N sessions is. Give **specific, actionable** recommendations
+   (e.g. "route doc-only sessions to Sonnet — would have saved ~$Y across N
+   sessions") and flag where the data is too thin to conclude.
+4. **Caveats** — note pricing assumptions (list prices unless edited), the
+   heuristic nature of outcome/agent-team signals, and any unpriced models, so
+   the assessment isn't over-trusted.
+
+Keep the whole section tight (roughly 150–350 words). Do not alter the
+deterministic tables above the Insights section.
+
+---
+
+## Step 5 — Report back
 
 `Read` `$OUT_DIR/summary.md` and present the highlights to the user:
 
@@ -208,6 +258,9 @@ Check `/tmp/cc_report.err` for `WARNING: unpriced model` lines and surface them.
   (multi-tag sessions are counted under each tag, so the columns intentionally
   exceed the grand total — it is not a partition).
 - Outcome distribution and feature-adoption shares.
+- The **Insights & assessment** you wrote in Step 4 — especially the model-choice
+  ROI findings (over-powered work, low-return spend, good-fit spend) with the
+  specific dollar figures and any recommended model routing.
 - Point them at `sessions.jsonl` / `sessions.csv` for the full data, and at
   `pricing.json` / `references/taxonomy.md` as the two tuning knobs.
 
