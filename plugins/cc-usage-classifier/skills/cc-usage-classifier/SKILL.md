@@ -12,7 +12,7 @@ description: >-
   verdict, extracted Jira/PR identifiers, repo/branch, and feature-usage flags.
   Local data only — no OpenTelemetry required.
 context: fork
-argument-hint: "[--projects-dir DIR] [--jira-projects ABC,DEF] [--redact-prompts] [--full]"
+argument-hint: "[--last-days N | --since YYYY-MM-DD --until YYYY-MM-DD] [--projects-dir DIR] [--jira-projects ABC,DEF] [--redact-prompts]"
 allowed-tools: Bash, Read, Write, Edit, Task
 ---
 
@@ -74,11 +74,26 @@ python3 "$SKILL_DIR/scripts/extract.py" \
 ```
 
 Pass through any user arguments: `--projects-dir`, `--jira-projects`,
-`--redact-prompts`, `--no-incremental`. Default output dir is
-`~/.claude/cc-usage-classifier/out`.
+`--redact-prompts`, `--no-incremental`, and the **date-range** flags below.
+Default output dir is `~/.claude/cc-usage-classifier/out`.
+
+**Date / time range.** When the user asks for a window ("last 30 days", "since
+May 1", "between two dates"), translate it to the extractor's flags — a session
+is included when its activity window overlaps the range:
+
+- `--last-days N` — e.g. `--last-days 30` for the last 30 days (UTC).
+- `--since YYYY-MM-DD` and/or `--until YYYY-MM-DD` — explicit bounds (also
+  accept full ISO 8601 timestamps; a date-only `--until` includes the whole
+  day). `--since` overrides `--last-days` if both are given.
+
+Filtering happens at extraction, so every downstream output (`sessions.*`,
+`summary.md`, costs, roll-ups) is automatically scoped to the chosen window.
+If the user didn't specify a range, run without these flags (all sessions).
 
 The command prints JSON: `{ "todo": [...], "cached": [...], "total": N,
-"out_dir": "...", "extracted": "..." }`.
+"out_dir": "...", "extracted": "...", "range": {since, until,
+skipped_out_of_range} }`. Mention the `range` back to the user so they can see
+how many sessions fell outside the window.
 
 - `todo` = sessions that are new or changed → need (re)classification.
 - `cached` = unchanged sessions → **do not reclassify** (incremental).

@@ -213,6 +213,11 @@ def write_summary(records, path):
     L("# Claude Code Usage — Classification Report\n")
     L(f"_Generated {datetime.now().isoformat(timespec='seconds')}_\n")
     L("## Grand totals (deduplicated — each session counted once)\n")
+    ts = [(r["first_timestamp"] or "")[:10] for r in records if r.get("first_timestamp")]
+    ts += [(r["last_timestamp"] or "")[:10] for r in records if r.get("last_timestamp")]
+    ts = [t for t in ts if t]
+    if ts:
+        L(f"- Date range covered: **{min(ts)} → {max(ts)}**")
     L(f"- Sessions: **{n}**")
     L(f"- Total tokens: **{grand_tokens:,}**")
     L(f"- Total cost: **${grand_cost:.4f}**\n")

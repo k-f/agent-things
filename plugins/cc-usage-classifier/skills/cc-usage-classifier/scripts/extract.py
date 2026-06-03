@@ -36,7 +36,7 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -90,6 +90,45 @@ def parse_ts(ts):
         return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+def parse_arg_dt(s, end_of_day=False):
+    """Parse a --since/--until argument. Accepts 'YYYY-MM-DD' or ISO 8601.
+
+    Naive values are treated as UTC. A date-only --until is pushed to the end
+    of that day so the whole day is included.
+    """
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except ValueError:
+        raise SystemExit(f"Bad date/time {s!r} — use YYYY-MM-DD or ISO 8601")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    # date-only string (midnight, no time component given) → optional EOD
+    if end_of_day and "T" not in str(s) and " " not in str(s):
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
+
+
+def session_in_range(first_iso, last_iso, since, until):
+    """True if the session's [first, last] activity window intersects the
+    [since, until] filter. Sessions with no parseable timestamp are excluded
+    only when a filter is active."""
+    if since is None and until is None:
+        return True
+    first = parse_ts(first_iso)
+    last = parse_ts(last_iso)
+    if first is None and last is None:
+        return False
+    lo = first or last
+    hi = last or first
+    if since is not None and hi < since:
+        return False
+    if until is not None and lo > until:
+        return False
+    return True
 
 
 def find_sessions(projects_dir):
@@ -505,7 +544,23 @@ def main():
                     help="Do not store any prompt/assistant/bash text")
     ap.add_argument("--no-incremental", action="store_true",
                     help="Reclassify everything (ignore cache hashes)")
+    ap.add_argument("--since", default=None,
+                    help="Only sessions active on/after this date/time "
+                         "(YYYY-MM-DD or ISO 8601, UTC if no zone)")
+    ap.add_argument("--until", default=None,
+                    help="Only sessions active on/before this date/time "
+                         "(date-only includes the whole day)")
+    ap.add_argument("--last-days", type=float, default=None,
+                    help="Shortcut for --since = now minus N days (UTC). "
+                         "Ignored if --since is given.")
     args = ap.parse_args()
+
+    since = parse_arg_dt(args.since)
+    until = parse_arg_dt(args.until, end_of_day=True)
+    if since is None and args.last_days is not None:
+        since = datetime.now(timezone.utc) - timedelta(days=args.last_days)
+    if since and until and since > until:
+        raise SystemExit(f"--since ({since}) is after --until ({until})")
 
     projects_dir = Path(args.projects_dir).expanduser()
     out_dir = Path(args.out_dir).expanduser()
@@ -529,10 +584,15 @@ def main():
     extracted_path = out_dir / "extracted.jsonl"
     todo, cached = [], []
     records = []
+    skipped_out_of_range = 0
     for session_id, grp in sorted(sessions.items()):
         paths = [grp["main"]] + grp["extra"]
         rec = extract_session(session_id, paths, args)
         if rec is None:
+            continue
+        if not session_in_range(rec["first_timestamp"], rec["last_timestamp"],
+                                since, until):
+            skipped_out_of_range += 1
             continue
         records.append(rec)
         prior = cache.get(session_id)
@@ -562,6 +622,11 @@ def main():
         "todo": todo, "cached": cached, "total": len(records),
         "out_dir": str(out_dir),
         "extracted": str(extracted_path),
+        "range": {
+            "since": since.isoformat() if since else None,
+            "until": until.isoformat() if until else None,
+            "skipped_out_of_range": skipped_out_of_range,
+        },
     }, indent=2))
 
 
