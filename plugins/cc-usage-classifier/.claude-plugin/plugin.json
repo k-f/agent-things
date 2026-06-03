@@ -1,0 +1,8 @@
+{
+  "name": "cc-usage-classifier",
+  "description": "Analyse your local Claude Code usage: one record per session combining per-model token/cost accounting with a semantic classification of the work (activity tags, summary, outcome, Jira/PR identifiers, repo/branch, feature usage). Local data only.",
+  "version": "0.1.0",
+  "author": {
+    "name": "agent-things"
+  }
+}
