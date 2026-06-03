@@ -1,25 +1,25 @@
 {
-  "_comment": "Per-model custom pricing, USD per MILLION tokens. Fill in your own negotiated/published rates. Keys are matched to a session's model ids first by EXACT id (e.g. 'claude-opus-4-8'), then by family normalisation ('claude-opus-4-8' -> 'claude-opus-4-x'). Unpriced models are warned about and left at $0.00 — never priced as another model. If your transcripts lack the 5m/1h cache split, cache_write tokens fall back to the cache_write_5m rate.",
+  "_comment": "Per-model pricing, USD per MILLION tokens. Values below are Anthropic's standard published list prices (5m cache write = 1.25x input, 1h cache write = 2x input, cache read = 0.1x input). VERIFY against your own plan/contract and your exact model tier (e.g. Sonnet's >200K-context tier is priced higher) before trusting the cost figures. Keys are matched to a session's model ids first by EXACT id (e.g. 'claude-opus-4-8'), then by family normalisation ('claude-opus-4-8' -> 'claude-opus-4-x'). Unpriced models are warned about and left at $0.00 — never priced as another model. If your transcripts lack the 5m/1h cache split, cache_write tokens fall back to the cache_write_5m rate.",
   "_token_types": "input, output, cache_read, cache_write_5m, cache_write_1h",
   "claude-opus-4-x": {
-    "input": 0.0,
-    "output": 0.0,
-    "cache_write_5m": 0.0,
-    "cache_write_1h": 0.0,
-    "cache_read": 0.0
+    "input": 15.0,
+    "output": 75.0,
+    "cache_write_5m": 18.75,
+    "cache_write_1h": 30.0,
+    "cache_read": 1.5
   },
   "claude-sonnet-4-x": {
-    "input": 0.0,
-    "output": 0.0,
-    "cache_write_5m": 0.0,
-    "cache_write_1h": 0.0,
-    "cache_read": 0.0
+    "input": 3.0,
+    "output": 15.0,
+    "cache_write_5m": 3.75,
+    "cache_write_1h": 6.0,
+    "cache_read": 0.3
   },
   "claude-haiku-4-x": {
-    "input": 0.0,
-    "output": 0.0,
-    "cache_write_5m": 0.0,
-    "cache_write_1h": 0.0,
-    "cache_read": 0.0
+    "input": 1.0,
+    "output": 5.0,
+    "cache_write_5m": 1.25,
+    "cache_write_1h": 2.0,
+    "cache_read": 0.1
   }
 }
