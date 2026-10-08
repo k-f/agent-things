@@ -141,3 +141,6 @@ vite.config.ts.timestamp-*
 # Python bytecode
 __pycache__/
 *.pyc
+
+# security-review run state
+.security-review/
