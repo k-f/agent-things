@@ -36,35 +36,30 @@ Diagnose and improve your Claude Code setup and usage. This plugin provides thre
 
 #### Usage
 
-Run the full diagnosis from any project:
+Run the full diagnosis from any project. Arguments are optional: log scope (`current` or `all`, default `current`) and project type (`poc`, `internal`, `production`, `regulated`, `safety-critical`, `library`; inferred from the repo if omitted). The skills run as background subagents and don't ask questions mid-run, so pass anything you want to set.
 
 ```shell
 /skill-issue:skill-issue
+/skill-issue:skill-issue all production
 ```
 
 Or run individual checks:
 
 ```shell
 # Just your interaction patterns
-/skill-issue:user-skill-issue
+/skill-issue:user-skill-issue [current|all]
 
 # Just the project configuration
-/skill-issue:project-skill-issue
+/skill-issue:project-skill-issue [project-type]
 ```
 
 #### What it analyses
 
-**User Skill Issue** — reads your session logs from `~/.claude/projects/` and evaluates:
+**User Skill Issue** — reads your session logs from `~/.claude/projects/` and evaluates eight dimensions: prompt clarity, context provision (judged against what CLAUDE.md already supplies), goal-setting, autonomy depth, feedback quality, output quality standards, feature utilisation, and domain vocabulary.
 
-- Prompt clarity & specificity
-- Context provision (do you share error messages, file references?)
-- Goal-setting & autonomy granting (do you give Claude goals or micro-manage step by step?)
-- Iterative efficiency (do you build on prior work or restart from scratch?)
-- Feedback quality (do you give Claude diagnostic info when things go wrong?)
-- Claude Code feature utilisation (skills, agents, CLAUDE.md, hooks)
-- Domain vocabulary & precision
+Evidence comes from two sources: quotes from your typed messages (skill bodies, command output, hook text and system reminders are filtered out), and per-session structure — tool calls between your messages, subagent spawns, skills and slash commands invoked, interrupts, and test runs. Autonomy, feedback and feature use are scored mainly from the structure.
 
-Output: a scored capability profile (Navigator → Beginner) with evidence-backed recommendations.
+Output: a scored capability profile (Orchestrator → Beginner) with evidence-backed recommendations.
 
 **Project Skill Issue** — reads the current project's configuration and evaluates:
 
@@ -72,15 +67,14 @@ Output: a scored capability profile (Navigator → Beginner) with evidence-backe
 - `.claude/` directory: settings, skills, agents, hooks
 - CI/CD integration (automated PR review, security, test analysis)
 - Documentation quality
-- Development practices
+- Delegation readiness (can Claude run tests and lint from documented commands and verify its own work?)
+- Production posture, calibrated to project type
 
 Output: a scored audit with prioritised quick wins and strategic improvements.
 
 #### Log retention
 
-The user skill analysis works best with 90+ days of history. If your retention period is lower, the skill will offer to increase it automatically.
-
-To set it manually, add to `~/.claude/settings.json`:
+The user skill analysis works best with 90+ days of history. If your retention period is lower, the report says so. The skill doesn't change your settings; to set it, add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -96,7 +90,7 @@ All analysis runs locally on your machine. No logs or messages leave your system
 
 ### `security-review` — Deep agent-team-driven security review
 
-A heavyweight security review plugin that coordinates a 14-agent team over a 7-phase workflow to produce a vulnerability report with CVSS v3.1 scores, exploit scenarios, suggested remediations, and per-finding human verification test plans. Designed for Opus 4.7 with the 1M context window and large inference budgets — typical runs take 1-12 hours.
+A heavyweight security review plugin that coordinates a 14-agent team over a 7-phase workflow to produce a vulnerability report with CVSS v3.1 scores, exploit scenarios, suggested remediations, and per-finding human verification test plans. Designed for a large-context Opus-class model. Runs take from minutes (`review-file`, `review-diff`) to 1-3 hours at the default `standard` depth, and longer at `deep` or `exhaustive`.
 
 | Skill | What it does |
 |---|---|
@@ -116,9 +110,10 @@ A heavyweight security review plugin that coordinates a 14-agent team over a 7-p
 
 #### Usage
 
-Full deep review of the current repo:
+Review the current repo. Optional arguments: target paths, `type=` (`poc`, `internal`, `production`, `regulated`, `safety-critical`; inferred if omitted) and `depth=` (`quick`, `standard` (default), `deep`, `exhaustive`). The skills run as background subagents and don't ask questions mid-run; progress goes to the run's manager log, visible via `/security-review:status`.
 ```shell
 /security-review:security-review
+/security-review:security-review type=production depth=deep
 ```
 
 Multi-repo review (client + server, microservice mesh):
@@ -126,9 +121,10 @@ Multi-repo review (client + server, microservice mesh):
 /security-review:review-cross-repo /path/to/client,/path/to/server
 ```
 
-PR-scoped review:
+PR-scoped review (base defaults to the merge-base with the default branch):
 ```shell
-/security-review:review-diff main HEAD
+/security-review:review-diff
+/security-review:review-diff origin/main HEAD type=production
 ```
 
 Resume an interrupted review:
@@ -138,11 +134,11 @@ Resume an interrupted review:
 
 #### How it works
 
-1. **Scoping** — asks for project type (PoC / internal / production / regulated / safety-critical) and depth budget; calibrates the severity bar.
+1. **Scoping** — reads project type and depth from the arguments (inferring the type from the code when absent) and calibrates the severity bar.
 2. **Recon** (`sr-recon` per repo) — maps attack surface, ranks every file 1-5 for vulnerability likelihood.
 3. **Threat model** (`sr-threat-modeller`) — STRIDE-style; produces a hunt-priority queue.
 4. **Distribution** — manager writes per-hunter assignment files dispatched top-down by priority.
-5. **Deep hunts** (parallel, batches of 5) — 8 vulnerability-class hunters: injection, authn/authz, crypto, code-execution & memory safety, web (XSS/SSRF/path-traversal), supply-chain & secrets, business-logic & race, plus cross-repo trust-boundary analyst when ≥2 repos. Each hunter runs a Mythos-style hypothesize-verify loop with adversarial self-challenge before writing any candidate.
+5. **Deep hunts** (parallel, batches of 5; hunters run on `sonnet` at `quick` depth and partly at `standard`) — 8 vulnerability-class hunters: injection, authn/authz, crypto, code-execution & memory safety, web (XSS/SSRF/path-traversal), supply-chain & secrets, business-logic & race, plus cross-repo trust-boundary analyst when ≥2 repos. Each hunter runs a Mythos-style hypothesize-verify loop with adversarial self-challenge before writing any candidate.
 6. **Verification** (`sr-verifier`, parallel) — independent adversarial second pass per candidate; promotes confirmed findings, rejects others, refines confidence and CVSS.
 7. **Triage** (`sr-triage`) — dedup, CVSS finalization, project-type calibration.
 8. **Chain composition** (`sr-chain-composer`) — looks for compositions of individually Medium/Low findings that produce Critical impact.
@@ -150,7 +146,7 @@ Resume an interrupted review:
 
 #### State management
 
-All run state lives at `<repo>/.security-review/<run-id>/` as markdown files (plan, recon, threat-model, assignments, worklogs, findings, triage-summary, chains, report). The manager reads paths, not contents — agents write outputs to disk and return only short summaries — so the orchestrator's context stays small no matter how many findings are produced. `init_run.py` appends `.security-review/` to `.gitignore` (with prompt). The directory is fully resumable: kill the review at any point, run `resume:<run-id>` to continue.
+All run state lives at `<repo>/.security-review/<run-id>/` as markdown files (plan, recon, threat-model, assignments, worklogs, findings, triage-summary, chains, report). The manager reads paths, not contents — agents write outputs to disk and return only short summaries — so the orchestrator's context stays small no matter how many findings are produced. `init_run.py` appends `.security-review/` to `.gitignore`. The directory is fully resumable: kill the review at any point, run `resume:<run-id>` to continue.
 
 #### What's deliberately out of scope
 
@@ -168,6 +164,22 @@ All analysis runs locally. The plugin reads target source code and writes findin
 
 ---
 
+### `cc-usage-classifier` — Usage and cost analysis
+
+Builds one record per Claude Code session from your local transcripts: per-model token and cost accounting (deduplicated by request), plus a classification of the work — activity tags, a summary, an outcome verdict, Jira/PR identifiers, repo/branch, and feature use. Writes `sessions.jsonl`, `sessions.csv` and `summary.md` (roll-ups and a model-choice ROI assessment) to `~/.claude/cc-usage-classifier/out`.
+
+```shell
+/plugin install cc-usage-classifier@agent-things
+/cc-usage-classifier:cc-usage-classifier --last-days 30
+```
+
+- **Cost**: list prices per model in `pricing.json`, including the Claude 5 family and Haiku 5.5's long-context tier. Models without a price are reported, never priced as another model; if they carry more than 5% of tokens the warning sits at the top of `summary.md`.
+- **Classification**: Haiku subagents in batches of up to 20 sessions. Re-runs only classify new or changed sessions.
+- **Invocation**: user-invoked only, because it spawns subagents and spends tokens. Arguments are parsed against an allowlist and never passed to a shell.
+- **Privacy**: everything stays local; `--redact-prompts` keeps prompt text out of payloads and outputs.
+
+---
+
 ## Contributing
 
 Plugins live in `plugins/<plugin-name>/`. Each plugin needs:
@@ -179,6 +191,10 @@ plugins/my-plugin/
 └── ... (skills/, agents/, hooks/, scripts/ as needed)
 ```
 
-Add an entry to `.claude-plugin/marketplace.json` to register it in this marketplace.
+Add an entry to `.claude-plugin/marketplace.json` to register it in this marketplace. Each plugin's script tests run with:
+
+```shell
+python3 -m unittest discover -s plugins/<plugin-name>/tests -v
+```
 
 See [Claude Code plugin documentation](https://code.claude.com/docs/en/plugins) for full details.

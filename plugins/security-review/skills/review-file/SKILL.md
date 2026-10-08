@@ -12,7 +12,7 @@ allowed-tools: Bash, Read, Glob, Grep, Write, Edit, Task
 
 Lightweight scoped review. Trades coverage for speed. Use to vet one file before committing, not for a comprehensive audit.
 
-You run as a forked subagent: you can't pose questions mid-run — nobody is there to answer. Shell state doesn't persist between Bash calls — use literal values.
+You run as a forked subagent: you can't pose questions mid-run — nobody is there to answer. Shell state doesn't persist between Bash calls — use literal values. Dispatch plugin agents by their namespaced name: `subagent_type: security-review:sr-<agent>`.
 
 - `SCRIPT_DIR` = `${CLAUDE_PLUGIN_ROOT}/scripts`
 - Raw arguments: `$ARGUMENTS`

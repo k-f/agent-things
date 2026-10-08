@@ -10,7 +10,7 @@ allowed-tools: Bash, Read, Glob, Grep, Write, Edit, Task
 
 # Re-run triage and report
 
-Re-runs phases 6, 6.5 and 7 against an existing run dir. Does not re-run hunters or verifiers. You run as a forked subagent: you can't pose questions mid-run — nobody is there to answer.
+Re-runs phases 6, 6.5 and 7 against an existing run dir. Does not re-run hunters or verifiers. You run as a forked subagent: you can't pose questions mid-run — nobody is there to answer. Dispatch plugin agents by their namespaced name: `subagent_type: security-review:sr-<agent>`.
 
 - `SCRIPT_DIR` = `${CLAUDE_PLUGIN_ROOT}/scripts`
 - Raw arguments: `$ARGUMENTS`

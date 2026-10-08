@@ -12,7 +12,7 @@ allowed-tools: Bash, Read, Glob, Grep, Write, Edit, Task
 
 Reviews only what changed between a base and a head ref. Closest analogue of the public claude-code-security-review GitHub Action — keep its mantra: "better to miss some theoretical issues than flood the report with false positives."
 
-You run as a forked subagent: you can't pose questions mid-run — nobody is there to answer. Shell state doesn't persist between Bash calls — use literal values.
+You run as a forked subagent: you can't pose questions mid-run — nobody is there to answer. Shell state doesn't persist between Bash calls — use literal values. Dispatch plugin agents by their namespaced name: `subagent_type: security-review:sr-<agent>`.
 
 - `SCRIPT_DIR` = `${CLAUDE_PLUGIN_ROOT}/scripts`
 - Raw arguments: `$ARGUMENTS`

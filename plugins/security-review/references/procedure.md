@@ -21,6 +21,8 @@ You are the manager of a 14-agent security review team. Your job is **coordinati
 
 **When dispatching agents, put the absolute paths in the prompt** — `Run directory: <abs RUN_DIR>` and `Scripts dir: <abs SCRIPT_DIR>`. Agents can't see your variables.
 
+**Plugin agents are namespaced.** Dispatch with `subagent_type: security-review:<agent>` (e.g. `security-review:sr-recon`). Where this document or a skill names an agent bare (`sr-verifier`), that is the agent; the dispatch name always carries the `security-review:` prefix.
+
 ---
 
 ## 1. Phase 1 — Scoping
@@ -81,7 +83,7 @@ First manager-log lines:
 For each repo in `TARGETS`, write `assignments/recon-<repo>.md` from `$PLUGIN_ROOT/templates/assignment-template.md` (repo path, depth budget). Add a plan.md row per repo. Dispatch all recon Tasks in one message (max 5 at a time):
 
 ```
-Task subagent_type=sr-recon, prompt:
+Task subagent_type=security-review:sr-recon, prompt:
   Run directory: <RUN_DIR>
   Scripts dir: <SCRIPT_DIR>
   All paths in your persona prompt that look like findings/..., recon/..., assignments/...,
@@ -100,7 +102,7 @@ Update plan.md rows `pending` → `running` (dispatched) → `done` (returned). 
 Write `assignments/tm-001.md`, add a plan row, dispatch:
 
 ```
-Task subagent_type=sr-threat-modeller, prompt:
+Task subagent_type=security-review:sr-threat-modeller, prompt:
   Run directory: <RUN_DIR>
   All paths in your persona prompt are under the run directory.
   Your assignment is at <RUN_DIR>/assignments/tm-001.md.
@@ -154,7 +156,7 @@ Why `standard` splits: source→sink classes are pattern-led and the strong veri
 Batch size = `Parallel hunter batch` from calibration.md. Sort pending assignments by priority (5 first). While any are pending, dispatch the next batch in one message:
 
 ```
-Task subagent_type=<hunter-name>, model=<from the model plan, or omit>, prompt:
+Task subagent_type=security-review:<hunter-name>, model=<from the model plan, or omit>, prompt:
   Run directory: <RUN_DIR>
   All paths in your persona prompt are under the run directory.
   Your assignment is at <RUN_DIR>/assignments/<id>.md.
@@ -188,7 +190,7 @@ Mark the row `failed`, read the worklog tail (usual cause: ran out of context), 
 For each `findings/candidates/*.md`, add a plan row and dispatch (same batch size; no model override):
 
 ```
-Task subagent_type=sr-verifier, prompt:
+Task subagent_type=security-review:sr-verifier, prompt:
   Run directory: <RUN_DIR>
   All paths in your persona prompt are under the run directory.
   Independently and adversarially verify the candidate at:
@@ -208,7 +210,7 @@ After every batch run index_findings.py and progress.py, and log running confirm
 ## 6. Phase 6 — Triage
 
 ```
-Task subagent_type=sr-triage, prompt:
+Task subagent_type=security-review:sr-triage, prompt:
   Run directory: <RUN_DIR>
   Scripts dir: <SCRIPT_DIR>
   Run id: <RUN_ID>
@@ -238,7 +240,7 @@ If validation fails, re-dispatch sr-triage with the failures listed (counts towa
 Skip if there are fewer than 2 confirmed findings (log it).
 
 ```
-Task subagent_type=sr-chain-composer, prompt:
+Task subagent_type=security-review:sr-chain-composer, prompt:
   Run directory: <RUN_DIR>
   All paths in your persona prompt are under the run directory.
   Read <RUN_DIR>/findings/SR-*.md, <RUN_DIR>/findings/INDEX.md,
@@ -257,7 +259,7 @@ Regenerate the index after.
 ## 7. Phase 7 — Report and final result
 
 ```
-Task subagent_type=sr-report-compiler, prompt:
+Task subagent_type=security-review:sr-report-compiler, prompt:
   Run directory: <RUN_DIR>
   Scripts dir: <SCRIPT_DIR>
   Run id: <RUN_ID>
