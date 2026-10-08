@@ -13,7 +13,7 @@
       "name": "skill-issue",
       "source": "./plugins/skill-issue",
       "description": "Diagnose and improve your Claude Code effectiveness. Analyzes your interaction logs and project configuration to identify skill gaps and setup improvements.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": {
         "name": "agent-things"
       },
@@ -23,8 +23,8 @@
     {
       "name": "security-review",
       "source": "./plugins/security-review",
-      "description": "Deep, agent-team-driven security review of one or more codebases. Coordinates a 14-agent team over a 7-phase workflow with adversarial verification and exploit-chain composition. Designed for Opus 4.7 with the 1M context window. Resumable; produces a vulnerability report with CVSS v3.1 scores and per-finding human verification test plans.",
-      "version": "0.1.0",
+      "description": "Deep, agent-team-driven security review of one or more codebases. Coordinates a 14-agent team over a 7-phase workflow with adversarial verification and exploit-chain composition. Resumable; produces a vulnerability report with CVSS v3.1 scores and per-finding human verification test plans.",
+      "version": "0.2.0",
       "author": {
         "name": "agent-things"
       },
@@ -35,7 +35,7 @@
       "name": "cc-usage-classifier",
       "source": "./plugins/cc-usage-classifier",
       "description": "Analyse your local Claude Code usage: one record per session combining per-model token/cost accounting with a semantic classification of the work (activity tags, summary, outcome, Jira/PR identifiers, repo/branch, feature usage). Local data only — deterministic Python extraction plus Haiku subagents for judgement.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "agent-things"
       },

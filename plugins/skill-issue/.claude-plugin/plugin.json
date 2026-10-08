@@ -1,7 +1,7 @@
 {
   "name": "skill-issue",
   "description": "Diagnose and improve your Claude Code setup and usage. Analyzes interaction logs (user-skill-issue) and project configuration (project-skill-issue) to surface actionable improvements. Run /skill-issue:skill-issue for a full diagnosis.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "agent-things"
   },

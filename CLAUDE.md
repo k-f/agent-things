@@ -35,15 +35,22 @@ README.md                           ← marketplace-level docs
 
 ### SKILL.md frontmatter rules
 - All skills that protect main context use `context: fork`
-- Skills not meant for Claude auto-invocation use `disable-model-invocation: true`
+- A forked skill runs as a background subagent and returns one result. It cannot ask the user anything mid-run. Take every input as an argument (`$ARGUMENTS`, `$ARGUMENTS[N]`), infer what's missing, and state the inference in the output. Never write "ask the user" or "wait for the response" in a forked skill
+- Skills not meant for Claude auto-invocation use `disable-model-invocation: true`. Anything long-running, subagent-spawning, or that spends money is user-invoked only
 - Always set `argument-hint` if the skill accepts arguments
-- Set `allowed-tools` explicitly; don't inherit more than needed
+- `allowed-tools` only pre-approves tools; it does not restrict them. To restrict, use `disallowed-tools` on the skill or a `tools` allowlist on an agent
+- Refer to bundled files with `${CLAUDE_SKILL_DIR}` or `${CLAUDE_PLUGIN_ROOT}` (substituted into the skill text). Never locate them with `find ~/.claude/plugins … | head -1` — the plugin cache can hold several versions
+- Shared rubrics and procedures live once in `references/` and are read by every skill/agent that needs them; don't copy them between files
+- Refer to models by alias (`haiku`, `sonnet`, `opus`), not pinned IDs or version names
 
 ### Scripts
 - Python scripts must work with `python3` (no `python` alias assumed)
 - Scripts should read from `Path.home() / ".claude"` not hardcoded paths
 - Always handle missing files gracefully with informative stderr output
 - Scripts should have a `--check-*` mode for diagnostics without side effects
+- Scripts that read `~/.claude` take an override flag (e.g. `--projects-dir`) so tests can point them at fixtures
+- Write temp/output files under the run or output directory, never fixed `/tmp/...` paths (concurrent runs collide)
+- Never pass `$ARGUMENTS` straight into a shell command; parse against an allowlist first
 
 ### Agents
 - Agents go in `agents/` at the plugin root
@@ -57,34 +64,46 @@ README.md                           ← marketplace-level docs
 
 ### How to test skills during development
 
-1. **Start a sub-agent to run the skill against real data:**
+1. **Run the plugin's unit tests** (stdlib `unittest`, synthetic fixtures under `tests/fixtures/`):
+   ```bash
+   python3 -m unittest discover -s plugins/<plugin>/tests -v
+   ```
+   Every script change needs a test against fixtures. Simulating a skill in a subagent checks the prose, not the behaviour — it does not catch shell bugs such as unexpanded `--include="*.{js,ts}"` globs.
+
+2. **Smoke-run the real skill headlessly** (this exercises frontmatter, substitutions and forking):
+   ```bash
+   claude -p --plugin-dir ./plugins/<plugin> "/<plugin>:<skill> <args>"
+   ```
+
+3. **Start a sub-agent to run the skill against real data:**
    Use the Task tool with `subagent_type: general-purpose` and instruct it to:
    - Read the SKILL.md files to understand what they produce
    - Execute the analysis steps against the actual current project
    - Return the full simulated output
 
-2. **Test the extraction script directly:**
+4. **Test the extraction script directly:**
    ```bash
    python3 plugins/<plugin>/scripts/<script>.py --help
    python3 plugins/<plugin>/scripts/<script>.py [args] 2>&1
    ```
 
-3. **Validate the marketplace JSON:**
+5. **Validate the marketplace JSON:**
    ```bash
    # Check JSON syntax at minimum
    python3 -c "import json; json.load(open('.claude-plugin/marketplace.json'))"
    python3 -c "import json; json.load(open('plugins/<plugin>/.claude-plugin/plugin.json'))"
    ```
 
-4. **Review checklist before committing:**
+6. **Review checklist before committing:**
+   - [ ] Unit tests pass
    - [ ] Script runs without errors (`--help` and actual execution)
    - [ ] SKILL.md frontmatter is valid YAML
-   - [ ] All `context: fork` skills have actionable tasks (not just reference content)
+   - [ ] All `context: fork` skills have actionable tasks (not just reference content) and no mid-run questions
    - [ ] Agent files have `name`, `description`, `tools`, `model` set
    - [ ] marketplace.json and plugin.json are valid JSON and consistent
    - [ ] Output quality reviewed: does the skill actually produce useful, calibrated output?
 
-5. **After seeing sub-agent test output:**
+7. **After seeing sub-agent test output:**
    - Critique the output: is it too lenient? Too vague? Missing dimensions?
    - Update skills if the analysis reveals gaps in the assessment criteria
    - Commit updates before marking the task done
@@ -105,7 +124,7 @@ A well-functioning diagnostic skill should:
 3. Add skills in `skills/<skill-name>/SKILL.md` with proper frontmatter
 4. Add agents in `agents/<agent-name>.md` if needed
 5. Add entry to `.claude-plugin/marketplace.json`
-6. **TEST IT** using the sub-agent method above
+6. **TEST IT** using the unit-test, headless smoke-run and sub-agent methods above
 7. Commit with a descriptive commit message
 
 ## Repository conventions
