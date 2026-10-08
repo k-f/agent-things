@@ -175,6 +175,8 @@ class PipelineTest(unittest.TestCase):
             "--pricing /etc/passwd",
             "--proj /x",  # abbreviations are disabled
             "--last-days 7 'unterminated",
+            "--out-dir '/x\n'",  # trailing newline must not pass the path check
+            "--jira-projects 'ABC\n'",
         ]
         for s in bad:
             with self.subTest(s=s):

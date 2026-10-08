@@ -622,7 +622,7 @@ def extract_identifiers(corpus, jira_projects):
 
 
 def _path_arg(value):
-    if not SAFE_PATH_RE.match(value or ""):
+    if not SAFE_PATH_RE.fullmatch(value or ""):
         raise argparse.ArgumentTypeError(
             f"unsafe or empty path {value!r} (allowed: letters, digits, "
             "space and ./~+@:,=%-_)")
@@ -649,7 +649,7 @@ def _date_arg(value):
 
 
 def _jira_arg(value):
-    if not JIRA_LIST_RE.match(value or ""):
+    if not JIRA_LIST_RE.fullmatch(value or ""):
         raise argparse.ArgumentTypeError(
             f"bad Jira project list {value!r} — use e.g. ABC,DEF")
     return value
