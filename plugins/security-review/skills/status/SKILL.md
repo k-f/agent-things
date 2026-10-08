@@ -4,26 +4,19 @@ description: Pretty-print the current progress.md of a security review run. Chea
 context: fork
 agent: general-purpose
 disable-model-invocation: true
-argument-hint: [run-id]
+argument-hint: "[run-id]"
 allowed-tools: Bash, Read, Glob
 ---
 
 # Security Review — status
 
-## Procedure
+Read-only. Raw arguments: `$ARGUMENTS`
 
-1. Parse `RUN_ID` from the first argument. If absent, find the most recent run.
-
-2. Render and print:
+1. `RUN_ID` = the first argument token, if any. Render (with no `RUN_ID`, progress.py picks the most recent run under cwd):
    ```bash
-   python3 "$CLAUDE_PLUGIN_ROOT/scripts/progress.py" \
-       ${RUN_ID:+--run "$RUN_ID"}
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/progress.py" --run "<RUN_ID>"   # or without --run when RUN_ID is empty
    ```
 
-3. If a run is currently in progress (any plan.md row with status `running`), tell the user:
-   > "This run is still in progress. To resume after a crash: `/security-review:security-review resume:<run-id>`"
-
-   If the run is fully done:
-   > "Final report: `.security-review/<run-id>/report.md`"
-
-That's it. This skill is read-only and trivial — it exists so users have an obvious affordance for checking status without reading multiple files.
+2. Return the rendered dashboard, followed by one line:
+   - any plan.md row `running` → "Still in progress. If the review session died, resume with `/security-review:security-review resume:<run-id>`."
+   - `report.md` exists in the run dir → "Final report: `.security-review/<run-id>/report.md`"

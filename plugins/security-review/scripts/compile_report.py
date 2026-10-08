@@ -65,12 +65,27 @@ def first_affected(text: str) -> str:
             mf = re.search(r"file:\s*(.+)$", line)
             if mf:
                 file_ = mf.group(1).strip().strip('"').strip("'")
-                ml = re.search(r"lines:\s*(.+)$", body[body.find(line):])
+                ml = re.search(r"lines:\s*(.+)$", _rest_of_item(body, line), re.M)
                 if ml:
                     lines_ = ml.group(1).split("\n")[0].strip().strip('"').strip("'")
                     return f"{file_}:{lines_}"
                 return file_
     return ""
+
+
+def _rest_of_item(body: str, line: str) -> str:
+    """Text of the current `affected:` list item, starting at `line`.
+
+    Stops at the next list item ("- ...") or the next top-level key so a `lines:` value is
+    never borrowed from a different affected entry.
+    """
+    rest = body[body.find(line):].splitlines()
+    out = [rest[0]]
+    for l in rest[1:]:
+        if l.lstrip().startswith("- ") or (l and not l[0].isspace()):
+            break
+        out.append(l)
+    return "\n".join(out)
 
 
 def severity_rank(s: str) -> int:

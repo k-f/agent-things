@@ -4,18 +4,26 @@ description: Multi-repo security review with the cross-repo trust-boundary analy
 context: fork
 agent: general-purpose
 disable-model-invocation: true
-argument-hint: <path1,path2[,path3,...]>
+argument-hint: "<path1,path2[,...]> [type=poc|internal|production|regulated|safety-critical] [depth=quick|standard|deep|exhaustive]"
 allowed-tools: Bash, Read, Glob, Grep, Write, Edit, Task
 ---
 
 # Security Review — multi-repo
 
-This skill is a convenience alias for `/security-review:security-review` with multiple targets. It guarantees the `sr-cross-repo-analyst` is dispatched in phase 4.
+You run as a forked subagent: you can't pose questions mid-run — nobody is there to answer.
 
-## Procedure
+- `PLUGIN_ROOT` = `${CLAUDE_PLUGIN_ROOT}`
+- `SCRIPT_DIR` = `${CLAUDE_PLUGIN_ROOT}/scripts`
+- Raw arguments: `$ARGUMENTS`
 
-1. Parse the argument as a comma-separated list of paths. Require at least 2.
-2. Confirm each path exists and is a directory.
-3. Hand off to the parent skill's procedure: read `$CLAUDE_PLUGIN_ROOT/skills/security-review/SKILL.md` and follow it from §1 onward, using `TARGETS=<paths-comma-separated>`.
+## Parse arguments
 
-In phase 3 (work distribution), ensure at least one assignment exists for `sr-cross-repo-analyst`. The threat-modeller will normally include it, but verify and add if missing. The cross-repo analyst's assignment must reference every repo's `recon/<repo>.md` file.
+Order-independent tokens: `type=<t>` → `PROJECT_TYPE`, `depth=<d>` → `DEPTH`; bare tokens are paths (comma-separated and/or space-separated) concatenated into `TARGETS`. Defaults: `PROJECT_TYPE` = `infer` (inferred from the first repo; when repos disagree, use the most demanding type and say so in the rationale), `DEPTH` = `standard`.
+
+Return an error (don't guess) if fewer than 2 paths are given, any path isn't an existing directory, or a key/value is invalid.
+
+## Run
+
+Read `${CLAUDE_PLUGIN_ROOT}/references/procedure.md` and follow it from §1 with these `TARGETS`.
+
+Additional rule for phase 3: at least one assignment must exist for `sr-cross-repo-analyst`. The threat-modeller normally includes it; add it if missing. Its assignment must reference every repo's `recon/<repo>.md`.

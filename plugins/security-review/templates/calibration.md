@@ -3,9 +3,9 @@
 > Run-id: `<RUN_ID>`. This file is written once at run start by the manager and never silently
 > changed mid-run. If calibration must change, append a new section with timestamp and rationale.
 
-## Inputs from user
+## Inputs
 
-- **Project type**: `<poc | internal | production | regulated | safety-critical | unsure>`
+- **Project type**: `<poc | internal | production | regulated | safety-critical>` (given via `type=`, or inferred — see "Project type inference" below if present)
 - **Depth budget**: `<quick | standard | deep | exhaustive>`
 
 ## Effective configuration

@@ -81,13 +81,14 @@ def main() -> int:
     print(f"# Replay audit — run {run_dir.name}")
     print()
     print(f"plan.md rows: {len(rows)}")
-    for status in ("done", "skipped", "running", "pending", "failed"):
+    for status in ("done", "skipped", "partial-superseded", "running", "pending", "partial", "failed"):
         print(f"  {status}: {len(by_status.get(status, []))}")
     print()
 
     needs_redispatch = (
         by_status.get("pending", [])
         + by_status.get("running", [])
+        + by_status.get("partial", [])
         + by_status.get("failed", [])
     )
     if needs_redispatch:

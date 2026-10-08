@@ -76,7 +76,7 @@ def first_affected(text: str) -> str:
             m = re.search(r"file:\s*(.+)$", line)
             if m:
                 v = m.group(1).strip().strip('"').strip("'")
-                lines_match = re.search(r"lines:\s*(.+)$", body[body.find(line):])
+                lines_match = re.search(r"lines:\s*(.+)$", _rest_of_item(body, line), re.M)
                 if lines_match:
                     lines_v = lines_match.group(1).split("\n")[0].strip().strip('"').strip("'")
                     return f"{v}:{lines_v}"
@@ -106,6 +106,21 @@ def collect(findings_dir: Path) -> List[Dict[str, str]]:
             "_path": str(fp),
         })
     return rows
+
+
+def _rest_of_item(body: str, line: str) -> str:
+    """Text of the current `affected:` list item, starting at `line`.
+
+    Stops at the next list item ("- ...") or the next top-level key so a `lines:` value is
+    never borrowed from a different affected entry.
+    """
+    rest = body[body.find(line):].splitlines()
+    out = [rest[0]]
+    for l in rest[1:]:
+        if l.lstrip().startswith("- ") or (l and not l[0].isspace()):
+            break
+        out.append(l)
+    return "\n".join(out)
 
 
 def severity_rank(s: str) -> int:

@@ -1,6 +1,7 @@
 # Security Review — Run Plan
 
 > Run-id: `<RUN_ID>` · started: `<START_TS>` · project type: `<PROJECT_TYPE>` · depth: `<DEPTH>`
+> Model plan: `<MODEL_PLAN>`
 > Targets:
 > - `<TARGET_1>` (commit `<HASH_1>`, `<LOC_1>` LOC)
 > - `<TARGET_2>` (commit `<HASH_2>`, `<LOC_2>` LOC)
@@ -9,7 +10,10 @@
 
 The manager is the SOLE owner of this file. Every Task dispatch writes a row; every Task return
 updates a row's status. On `resume:<run-id>`, the manager scans this table and re-dispatches any
-row whose status is `pending`, `running`, or `failed`.
+row whose status is `pending`, `running`, `partial`, or `failed`. Record the dispatch `model` override
+(if any) in Notes, e.g. `model=sonnet`.
+
+<!-- The rows below are illustrative; init_run.py replaces them with the single phase-1 row. -->
 
 | Phase | Step | Agent | Assignment | Status | Started | Finished | Notes |
 |---|---|---|---|---|---|---|---|
@@ -33,7 +37,7 @@ row whose status is `pending`, `running`, or `failed`.
 - `done` — completed successfully
 - `partial` — agent returned with status `partial` (ran out of context or scope too large); a successor row was appended for the narrowed re-dispatch
 - `partial-superseded` — successor row reached `done`; this row's incomplete work is now covered
-- `failed` — Task returned with error; investigate worklog before re-dispatch (track retries in Notes column, max 2 auto-retries)
+- `failed` — Task returned with error; investigate worklog before re-dispatch (track retries in Notes column, max 2 auto-retries; after that mark `skipped` with Notes `failed twice: <reason>`)
 - `skipped` — phase was skipped per scope (e.g. no crypto in repo → sr-crypto-hunter skipped)
 
 ## Phase transition rules

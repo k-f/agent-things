@@ -7,8 +7,8 @@ calibration.md, targets.md, and an empty findings/ tree.
 
 Usage:
     python3 init_run.py --targets path1[,path2,...] \
-                        --project-type {poc|internal|production|regulated|safety-critical|unsure} \
-                        --depth {quick|standard|deep|exhaustive} \
+                        --project-type {poc|internal|production|regulated|safety-critical} \
+                        [--depth {quick|standard|deep|exhaustive}]   # default: standard \
                         [--gitignore]
 
     python3 init_run.py --check-deps     # diagnostics only, no side effects
@@ -30,10 +30,11 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Dict, Optional
 
 VALID_PROJECT_TYPES = {"poc", "internal", "production", "regulated", "safety-critical"}
-# Note: "unsure" is a UI affordance for the parent skill only — the manager must resolve it
-# to a concrete type BEFORE calling this script. We refuse "unsure" to keep calibration honest.
+# Note: "infer"/"unsure" are skill-level affordances only — the manager must resolve them to a
+# concrete type BEFORE calling this script. We refuse them to keep calibration honest.
 VALID_DEPTHS = {"quick", "standard", "deep", "exhaustive"}
 
 DEPTH_BUDGETS = {
@@ -42,6 +43,36 @@ DEPTH_BUDGETS = {
     "deep":       {"hunter_ctx": 600_000, "verify_ctx": 400_000, "recon_ctx": 300_000, "parallel": 5},
     "exhaustive": {"hunter_ctx": 800_000, "verify_ctx": 500_000, "recon_ctx": 400_000, "parallel": 5},
 }
+
+# Per-depth model plan for hunter dispatch. The manager passes the value as the Task tool's
+# per-call `model` parameter; None means "omit it — use the agent's frontmatter default".
+# Precision gates (threat-modeller, verifier, triage, chain-composer) are never overridden.
+HUNTERS = (
+    "sr-injection-hunter", "sr-web-hunter", "sr-crypto-hunter", "sr-supplychain-secrets-hunter",
+    "sr-authnz-hunter", "sr-businesslogic-hunter", "sr-codeexec-hunter", "sr-cross-repo-analyst",
+)
+_PATTERN_LED = {"sr-injection-hunter", "sr-web-hunter", "sr-crypto-hunter",
+                "sr-supplychain-secrets-hunter"}
+HUNTER_MODEL_PLAN: Dict[str, Dict[str, Optional[str]]] = {
+    "quick":      {h: "sonnet" for h in HUNTERS},
+    "standard":   {h: ("sonnet" if h in _PATTERN_LED else None) for h in HUNTERS},
+    "deep":       {h: None for h in HUNTERS},
+    "exhaustive": {h: None for h in HUNTERS},
+}
+NEVER_OVERRIDDEN = ("sr-threat-modeller", "sr-verifier", "sr-triage", "sr-chain-composer")
+
+
+def model_plan_summary(depth: str) -> str:
+    """One-line summary, e.g. 'hunters: sonnet (all)'."""
+    plan = HUNTER_MODEL_PLAN[depth]
+    overridden = sorted(h for h, m in plan.items() if m)
+    if not overridden:
+        return "hunters: agent default (all)"
+    if len(overridden) == len(plan):
+        return f"hunters: {plan[overridden[0]]} (all)"
+    default = sorted(h for h, m in plan.items() if not m)
+    return (f"hunters: {plan[overridden[0]]} for {', '.join(overridden)}; "
+            f"agent default for {', '.join(default)}")
 
 
 def find_templates_dir() -> Path:
@@ -156,7 +187,8 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--targets", help="Comma-separated repo paths to review")
     p.add_argument("--project-type", choices=sorted(VALID_PROJECT_TYPES))
-    p.add_argument("--depth", choices=sorted(VALID_DEPTHS), default="deep")
+    p.add_argument("--depth", choices=sorted(VALID_DEPTHS), default="standard",
+                   help="Review depth (default: standard)")
     p.add_argument("--gitignore", action="store_true",
                    help="Append .security-review/ to .gitignore in each target repo")
     p.add_argument("--check-deps", action="store_true", help="Diagnostics only; no side effects")
@@ -243,6 +275,11 @@ def main() -> int:
         f"- Recon context budget: `{budgets['recon_ctx']:,}` tokens\n"
         f"- Parallel hunter batch: `{budgets['parallel']}`\n"
         f"- Confidence threshold for report: `0.8`\n"
+        f"- Model plan: {model_plan_summary(args.depth)}. Never overridden: "
+        f"{', '.join(NEVER_OVERRIDDEN)}.\n"
+        "\n| Hunter | Task `model` parameter |\n|---|---|\n"
+        + "".join(f"| {h} | `{m}` |\n" if m else f"| {h} | (omit — agent default) |\n"
+                  for h, m in HUNTER_MODEL_PLAN[args.depth].items())
     )
     cal_path.write_text(cal_text)
 
@@ -253,6 +290,7 @@ def main() -> int:
     plan_text = plan_text.replace("`<START_TS>`", f"`{now:%Y-%m-%d %H:%M:%S}`")
     plan_text = plan_text.replace("`<PROJECT_TYPE>`", f"`{args.project_type}`")
     plan_text = plan_text.replace("`<DEPTH>`", f"`{args.depth}`")
+    plan_text = plan_text.replace("`<MODEL_PLAN>`", f"`{model_plan_summary(args.depth)}`")
     targets_block = "\n".join(
         f"> - `{t}` (commit `{git_head(t)}`, {loc_count(t)} LOC)" for t in targets
     )
@@ -262,7 +300,28 @@ def main() -> int:
         plan_text,
         count=1,
     )
+    plan_text = plan_text.replace(
+        "<!-- The rows below are illustrative; init_run.py replaces them with the single "
+        "phase-1 row. -->\n\n", "")
+    # Replace the template's illustrative rows with the one real row: scoping is done.
+    # (Leaving the examples in would leave `pending` placeholder rows that block every phase
+    # transition and show up as re-dispatch candidates on resume.)
+    plan_text = re.sub(
+        r"(\| Phase \| Step \| Agent[^\n]*\n\|[-| ]+\|\n)(?:\|[^\n]*\n)+",
+        lambda m: m.group(1)
+        + f"| 1 | scoping | (manager) | — | done | {now:%Y-%m-%d %H:%M:%S} | "
+          f"{now:%Y-%m-%d %H:%M:%S} | calibration written |\n",
+        plan_text,
+        count=1,
+    )
     plan_path.write_text(plan_text)
+
+    # Manager log: status lines the forked manager would otherwise have said to the user.
+    (run_dir / "worklog" / "manager.md").write_text(
+        f"# Manager log — run {run_id}\n\n"
+        f"- {now:%Y-%m-%d %H:%M:%S} run initialised · type={args.project_type} · "
+        f"depth={args.depth} · {model_plan_summary(args.depth)}\n"
+    )
 
     # Optional .gitignore handling per-repo.
     if args.gitignore:

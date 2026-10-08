@@ -134,7 +134,10 @@ def validate_one(path: Path) -> Tuple[str, List[str]]:
         msgs.append(f"confidence not numeric: {fm.get('confidence')!r}")
 
     # Required sections (presence + order)
-    body = text.split("\n---", 1)[-1].split("---", 1)[-1] if text.startswith("---") else text
+    # Body = everything after the closing frontmatter fence. (Splitting on the next "---" would
+    # truncate at the first markdown table separator or horizontal rule in the body.)
+    fm_end = text.find("\n---", 3) if text.startswith("---") else -1
+    body = text[fm_end + 4:] if fm_end != -1 else text
     last_idx = -1
     for sec in REQUIRED_SECTIONS:
         idx = body.find(sec)

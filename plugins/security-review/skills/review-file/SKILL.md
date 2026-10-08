@@ -4,68 +4,51 @@ description: Single-file security review. Fast (minutes, not hours). Skips the f
 context: fork
 agent: general-purpose
 disable-model-invocation: true
-argument-hint: <path-to-file>
+argument-hint: "<path-to-file> [type=poc|internal|production|regulated|safety-critical]"
 allowed-tools: Bash, Read, Glob, Grep, Write, Edit, Task
 ---
 
 # Security Review — single file
 
-Lightweight scoped review. Trades coverage for speed. Use when you want to vet one file before committing, not for a comprehensive audit.
+Lightweight scoped review. Trades coverage for speed. Use to vet one file before committing, not for a comprehensive audit.
+
+You run as a forked subagent: you can't pose questions mid-run — nobody is there to answer. Shell state doesn't persist between Bash calls — use literal values.
+
+- `SCRIPT_DIR` = `${CLAUDE_PLUGIN_ROOT}/scripts`
+- Raw arguments: `$ARGUMENTS`
 
 ## Procedure
 
-0. Locate plugin scripts (same pattern as the parent skill):
-   ```bash
-   SCRIPT_DIR="${CLAUDE_PLUGIN_ROOT:-}/scripts"
-   [ ! -d "$SCRIPT_DIR" ] && SCRIPT_DIR=$(dirname $(find ~/.claude/plugins -name "init_run.py" -path "*security-review*" 2>/dev/null | head -1))
-   ```
+1. **Parse arguments** (order-independent): `type=<t>` → `PROJECT_TYPE` (default `infer`); the one bare token → `FILE`. Missing `FILE`, more than one bare token, a non-regular file, or an invalid value → return an error naming the problem.
 
-1. Parse argument as `FILE`. Require a file path. Confirm it exists and is a regular file.
-
-2. Determine relevant hunter classes by inspecting the file's content briefly:
-   ```bash
-   head -200 "$FILE"
-   ```
-   Pick the subset of hunters whose vulnerability classes plausibly apply:
+2. **Pick hunter classes** from a quick look (`head -200 "$FILE"`):
    - Always: `sr-injection-hunter`, `sr-codeexec-hunter`, `sr-supplychain-secrets-hunter`
-   - If file imports / uses crypto: add `sr-crypto-hunter`
-   - If file is a route handler / web framework code: add `sr-authnz-hunter`, `sr-web-hunter`
-   - If file implements money / state-machine / permissions: add `sr-businesslogic-hunter`
+   - Imports / uses crypto: add `sr-crypto-hunter`
+   - Route handler / web framework code: add `sr-authnz-hunter`, `sr-web-hunter`
+   - Money / state-machine / permissions logic: add `sr-businesslogic-hunter`
 
-3. Determine the containing repo (walk up from `FILE` looking for `.git/`). Determine project type: ask the user briefly with the same options as the parent skill, or default to `internal` if they want to skip the question. Initialize a minimal run dir:
+3. **Repo and project type.** `REPO_ROOT=$(git -C "$(dirname "$FILE")" rev-parse --show-toplevel 2>/dev/null || dirname "$FILE")`. If `PROJECT_TYPE` is `infer`, apply the inference block in `${CLAUDE_PLUGIN_ROOT}/references/procedure.md` §1a to `REPO_ROOT` and keep the one-sentence rationale. Initialize:
    ```bash
-   RUN_ID=$(python3 "$SCRIPT_DIR/init_run.py" --targets "$REPO_ROOT" \
-                                                --project-type "$PROJECT_TYPE" \
-                                                --depth quick)
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init_run.py" --targets "<REPO_ROOT>" --project-type "<PROJECT_TYPE>" --depth quick
    ```
+   stdout is `RUN_ID`; `RUN_DIR=<abs cwd>/.security-review/<RUN_ID>`. Log type (given/inferred + rationale) to `$RUN_DIR/worklog/manager.md`; if inferred, append the "Project type inference" section to `calibration.md` (procedure §1b).
 
-4. Skip phases 2-3 (no recon, no threat model). Synthesize a minimal recon stub at `recon/<repo>.md` listing just this file as priority 5.
+4. Skip phases 2–3. Write a recon stub at `$RUN_DIR/recon/<repo>.md` listing just this file as priority 5.
 
-5. Write one assignment per chosen hunter, scoped to `FILE` only. Hypothesis seed: "default" (no diversity needed at this scale).
+5. One assignment per chosen hunter, scoped to `FILE`. Hypothesis seed: "default".
 
-6. Dispatch hunters (at most 3 in parallel — file scope is small). Wait.
+6. Dispatch hunters (≤3 in parallel). Depth is `quick`, so pass `model: sonnet` on each hunter Task (model plan in calibration.md).
 
-7. Verify candidates with `sr-verifier`.
+7. Verify candidates with `sr-verifier` (no model override; dispatch as procedure §5).
 
-8. Skip `sr-chain-composer` (single-file scope rarely produces meaningful chains).
+8. Skip `sr-chain-composer`.
 
-9. Run `sr-triage` to finalize CVSS + calibration.
+9. `sr-triage` (procedure §6), then `sr-report-compiler` (procedure §7) for a mini report at `$RUN_DIR/report.md`.
 
-10. Run `sr-report-compiler` to produce a mini report at `<run-dir>/report.md`.
+10. Return the full report inline (typically 1–5 findings) plus the manager-log lines.
 
-11. Print the full report inline (since it's small — typical: 1-5 findings).
+## Skips vs the full review
+Multi-repo analysis · threat modelling · real recon (stubbed) · chain composition · per-class partitioning / seed diversity · cross-repo analyst.
 
-## What this skill skips vs the full review
-- Multi-repo analysis (uses just the file's containing repo)
-- Threat modelling (no need at file scope)
-- Recon (synthesized stub)
-- Chain composition (rarely meaningful at this scope)
-- Per-class partitioning / hypothesis-seed diversity
-- Cross-repo analyst
-
-## What this skill keeps
-- The hypothesize-verify loop with adversarial self-challenge
-- The independent verifier pass
-- The schema for findings (full CVSS, exploit scenarios, test plans)
-- Project-type calibration
-- The exclusion list (no DoS, no rate-limiting-without-impact, etc.)
+## Keeps
+Hypothesize-verify loop with adversarial self-challenge · independent verifier · full finding schema (CVSS, exploit scenario, test plan) · project-type calibration · the exclusion list (no DoS, no rate-limiting-without-impact, etc.).

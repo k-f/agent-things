@@ -41,10 +41,17 @@ def parse_plan(plan_path: Path) -> Tuple[str, List[Dict[str, str]]]:
     header_lines: List[str] = []
     rows: List[Dict[str, str]] = []
     in_table = False
+    seen_table = False
+    in_preamble = True
     headers: List[str] = []
     for line in text.splitlines():
-        if not in_table and line.startswith("| Phase | Step | Agent"):
+        if line.startswith("## "):
+            # Header block = the plan's preamble only (run-id / targets), not the
+            # status legend and transition rules that follow the table.
+            in_preamble = False
+        if not in_table and not seen_table and line.startswith("| Phase | Step | Agent"):
             in_table = True
+            seen_table = True
             headers = [h.strip() for h in line.strip("|").split("|")]
             continue
         if in_table and re.match(r"^\|[-: ]+\|", line):
@@ -57,7 +64,7 @@ def parse_plan(plan_path: Path) -> Tuple[str, List[Dict[str, str]]]:
             if len(cells) != len(headers):
                 continue
             rows.append(dict(zip(headers, cells)))
-        else:
+        elif in_preamble:
             header_lines.append(line)
     return "\n".join(header_lines).strip(), rows
 
@@ -154,6 +161,19 @@ def render(run_dir: Path) -> str:
                 f"`{r.get('Assignment', '')}` · {r.get('Notes', '')}"
             )
         out.append("")
+
+    # Recent manager-log lines (the forked manager can't talk to the user mid-run).
+    mlog = run_dir / "worklog" / "manager.md"
+    if mlog.exists():
+        try:
+            notes = [l for l in mlog.read_text().splitlines() if l.startswith("- ")]
+        except OSError:
+            notes = []
+        if notes:
+            out.append("## Recent manager notes")
+            out.append("")
+            out.extend(notes[-10:])
+            out.append("")
 
     return "\n".join(out) + "\n"
 

@@ -4,49 +4,42 @@ description: Re-run triage / chain composition / report compilation against an e
 context: fork
 agent: general-purpose
 disable-model-invocation: true
-argument-hint: <run-id> [project-type]
+argument-hint: "<run-id> [type=poc|internal|production|regulated|safety-critical] [reason=\"...\"]"
 allowed-tools: Bash, Read, Glob, Grep, Write, Edit, Task
 ---
 
 # Re-run triage and report
 
-Re-runs phases 6, 6.5, and 7 against an existing run dir. Does not re-run hunters or verifiers.
+Re-runs phases 6, 6.5 and 7 against an existing run dir. Does not re-run hunters or verifiers. You run as a forked subagent: you can't pose questions mid-run — nobody is there to answer.
+
+- `SCRIPT_DIR` = `${CLAUDE_PLUGIN_ROOT}/scripts`
+- Raw arguments: `$ARGUMENTS`
 
 ## Procedure
 
-1. Parse `RUN_ID` from the first argument. Confirm `.security-review/<RUN_ID>/` exists.
+1. **Parse arguments.** First bare token → `RUN_ID` (required). `type=<t>` → new `PROJECT_TYPE` (a bare second token that is a valid type is accepted too). `reason=<text>` (may be quoted, may contain spaces) → `REASON` (default "not stated"). Confirm `.security-review/<RUN_ID>/` exists; otherwise return an error listing `ls .security-review/`. `RUN_DIR` = its absolute path.
 
-2. If a second argument is provided, treat it as the new `PROJECT_TYPE`. Per `calibration.md`'s own contract ("If calibration must change, append a new section with timestamp and rationale"), do NOT overwrite the existing project-type line — instead append a new section to `calibration.md`:
+2. **Calibration change** (only if a new type was given and differs from the current one). Per `calibration.md`'s contract, don't overwrite the project-type line — append:
    ```
    ## Calibration change — <timestamp>
-   Project type changed from `<old>` to `<new>` because <user-supplied reason or "unspecified">.
+   Project type changed from `<old>` to `<new>` because <REASON>.
    This re-triage applies the new severity bar; prior triage decisions remain in finding history.
    ```
-   The new project type takes effect for the re-run; the original is preserved as audit history.
 
-3. Run replay audit:
+3. Audit:
    ```bash
-   python3 "$CLAUDE_PLUGIN_ROOT/scripts/replay.py" --run "$RUN_ID" --check-consistency
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/replay.py" --run "<RUN_ID>" --check-consistency
    ```
 
-4. Confirm there are confirmed findings to triage:
-   ```bash
-   ls .security-review/$RUN_ID/findings/SR-*.md 2>/dev/null | head
-   ```
-   If none, tell the user and exit.
+4. `ls "<RUN_DIR>"/findings/SR-*.md 2>/dev/null | head`. None → return "No confirmed findings in run `<RUN_ID>`; nothing to triage." and stop.
 
-5. Dispatch `sr-triage` (per the parent skill's §6).
+5. Read `${CLAUDE_PLUGIN_ROOT}/references/procedure.md` and dispatch, in order and using its prompts: `sr-triage` (§6), then — once validation passes — `sr-chain-composer` (§6.5), then `sr-report-compiler` (§7). No model overrides: these three always use their agent defaults.
 
-6. After triage passes validate, dispatch `sr-chain-composer` (parent §6.5).
-
-7. Dispatch `sr-report-compiler` (parent §7).
-
-8. Tell the user the new report is at `.security-review/$RUN_ID/report.md`.
+6. Append each step's headline to `<RUN_DIR>/worklog/manager.md` and return: the new report path, severity counts, any calibration change applied, and those log lines.
 
 ## When to use this
 
-- You added a new finding manually (rare, but possible)
+- You added or edited a finding manually
 - You want to re-calibrate (e.g. system moved from PoC → production)
-- The compile_report.py output format changed and you want to regenerate
+- compile_report.py's output format changed and you want to regenerate
 - An earlier triage pass was interrupted before chain composition or report
-- You want to inspect chain composition independently of the rest of the workflow
