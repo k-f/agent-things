@@ -17,6 +17,7 @@ written their per-session classification JSON files.
 
 Usage:
   python3 report.py [--out-dir DIR] [--pricing pricing.json]
+Warnings go to stderr and <out-dir>/logs/report.log.
 """
 
 import argparse
@@ -28,12 +29,15 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cost import load_pricing, price_record  # noqa: E402
+from cost import load_pricing, price_record, unpriced_share  # noqa: E402
 
 DEFAULT_OUT_DIR = Path.home() / ".claude" / "cc-usage-classifier" / "out"
 DEFAULT_PRICING = Path(__file__).resolve().parent.parent / "pricing.json"
 
 VALID_OUTCOMES = {"successful", "partial", "abandoned", "unknown"}
+# unpriced models above this share of all tokens get a warning banner at the
+# top of summary.md (costs are materially understated)
+UNPRICED_BANNER_SHARE = 0.05
 TOKEN_TYPES = ["input", "output", "cache_read",
                "cache_write_5m", "cache_write_1h", "cache_write"]
 
@@ -110,6 +114,10 @@ def load_classification(session_id, class_dir):
     except Exception as exc:
         print(f"Warning: bad classification {path}: {exc}", file=sys.stderr)
         return None
+    if not isinstance(data, dict):
+        print(f"Warning: bad classification {path}: not a JSON object",
+              file=sys.stderr)
+        return None
     # validate / normalise
     tags = data.get("tags") or []
     if isinstance(tags, str):
@@ -118,14 +126,20 @@ def load_classification(session_id, class_dir):
     outcome = data.get("outcome")
     if outcome not in VALID_OUTCOMES:
         outcome = "unknown"
+    try:
+        conf = min(1.0, max(0.0, float(data.get("outcome_confidence") or 0.0)))
+    except (TypeError, ValueError):
+        conf = 0.0
     return {
         "tags": [str(t) for t in tags],
         "summary": str(data.get("summary", "")).strip(),
         "outcome": outcome,
-        "outcome_confidence": float(data.get("outcome_confidence", 0.0) or 0.0),
+        "outcome_confidence": conf,
         "outcome_justification": str(data.get("outcome_justification",
                                               data.get("justification", ""))).strip(),
-        "identifiers": data.get("identifiers", []),
+        "identifiers": [i for i in (data.get("identifiers") or [])
+                        if isinstance(i, dict) and "type" in i and "value" in i]
+        if isinstance(data.get("identifiers"), list) else [],
         "source": "subagent",
     }
 
@@ -194,7 +208,25 @@ def iso_week(day):
         return "unknown"
 
 
-def write_summary(records, path):
+def unpriced_banner(records, pricing, threshold=UNPRICED_BANNER_SHARE):
+    """Lines for a top-of-report warning, or [] if unpriced share is small."""
+    grand, unpriced = unpriced_share(records, pricing)
+    if not grand or not unpriced:
+        return []
+    share = sum(unpriced.values()) / grand
+    if share <= threshold:
+        return []
+    out = [f"> **⚠️ WARNING — costs are understated.** Unpriced models carry "
+           f"**{share:.1%}** of all tokens and are counted at $0.00. Add their "
+           f"rates to `pricing.json` and re-run `report.py`:",
+           ">"]
+    for m, n in sorted(unpriced.items(), key=lambda kv: -kv[1]):
+        out.append(f"> - `{m}` — {n:,} tokens ({n / grand:.1%})")
+    out.append("")
+    return out
+
+
+def write_summary(records, path, pricing=None):
     n = len(records)
     grand_cost = sum(r.get("session_cost_usd", 0.0) for r in records)
     # deduped token totals (each session once), per model
@@ -211,6 +243,8 @@ def write_summary(records, path):
     lines = []
     L = lines.append
     L("# Claude Code Usage — Classification Report\n")
+    if pricing is not None:
+        lines.extend(unpriced_banner(records, pricing))
     L(f"_Generated {datetime.now().isoformat(timespec='seconds')}_\n")
     L("## Grand totals (deduplicated — each session counted once)\n")
     ts = [(r["first_timestamp"] or "")[:10] for r in records if r.get("first_timestamp")]
@@ -361,11 +395,14 @@ def main():
 
     pricing = load_pricing(args.pricing)
     warned = set()
+    (out_dir / "logs").mkdir(exist_ok=True)
+    log_fh = open(out_dir / "logs" / "report.log", "w", encoding="utf-8")
 
     def warn(msg):
         if msg not in warned:
             warned.add(msg)
             print(f"WARNING: {msg}", file=sys.stderr)
+            log_fh.write(f"WARNING: {msg}\n")
 
     records = []
     for line in open(extracted, encoding="utf-8"):
@@ -391,7 +428,7 @@ def main():
             w.writerows(rows)
 
     # summary
-    write_summary(records, out_dir / "summary.md")
+    write_summary(records, out_dir / "summary.md", pricing)
 
     # persist classifications into cache (incremental)
     for rec in records:
@@ -401,8 +438,11 @@ def main():
         cache[sid] = {"hash": rec["file_hash"], "classification": cls}
     cache_path.write_text(json.dumps(cache, indent=2))
 
-    print(f"Wrote sessions.jsonl, sessions.csv, summary.md to {out_dir} "
-          f"({len(records)} sessions)", file=sys.stderr)
+    msg = (f"Wrote sessions.jsonl, sessions.csv, summary.md to {out_dir} "
+           f"({len(records)} sessions)")
+    print(msg, file=sys.stderr)
+    log_fh.write(msg + "\n")
+    log_fh.close()
 
 
 if __name__ == "__main__":

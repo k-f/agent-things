@@ -1,19 +1,15 @@
 ---
 name: cc-usage-classifier
 description: >-
-  Analyse, classify, and cost the user's local Claude Code usage from
-  ~/.claude/projects transcripts — one enriched record per session. USE THIS
-  whenever the user wants to understand what work they've been doing in Claude
-  Code or what it cost, e.g. "analyse my Claude Code usage", "classify my
-  sessions", "what work have I been doing in Claude Code", "cost by type of
-  work", "how much am I spending in Claude Code", "break down my Claude Code
-  sessions", "which of my sessions were debugging vs implementation". Produces
-  per-model token/cost accounting plus activity tags, a summary, an outcome
-  verdict, extracted Jira/PR identifiers, repo/branch, and feature-usage flags.
-  Local data only — no OpenTelemetry required.
+  Classify and cost local Claude Code sessions from ~/.claude/projects
+  transcripts: per-model token/cost accounting, activity tags, outcome
+  verdicts, Jira/PR identifiers, repo/branch and feature usage, rolled up into
+  a summary report with model-choice ROI insights. Spawns Haiku subagents for
+  classification. Local data only — no OpenTelemetry required.
 context: fork
-argument-hint: "[--last-days N | --since YYYY-MM-DD --until YYYY-MM-DD] [--projects-dir DIR] [--jira-projects ABC,DEF] [--redact-prompts]"
-allowed-tools: Bash, Read, Write, Edit, Task
+disable-model-invocation: true
+argument-hint: "[--last-days N | --since YYYY-MM-DD --until YYYY-MM-DD] [--projects-dir DIR] [--jira-projects ABC,DEF] [--redact-prompts] [--no-incremental] [--out-dir DIR]"
+allowed-tools: Bash, Read, Write, Edit, Agent, Task
 ---
 
 # Claude Code Usage Classifier
@@ -26,175 +22,168 @@ spawn Haiku subagents for the judgement calls (tags, summary, outcome verdict).
 **Granularity is the session. Cost is per session, per model — never collapsed
 to one model and never apportioned across stages within a session.**
 
-`$SKILL_DIR` below = the directory containing this SKILL.md. Resolve it once,
-preferring the user-level install under `~/.claude/` and falling back to a
-project-level `.claude/`:
+You run as a forked subagent: you cannot ask the user anything mid-run, and
+your final message is the only thing they see. Never stop to ask or wait for
+confirmation — use the defaults below, proceed, and list every assumption you
+made in the final result.
 
-```bash
-SKILL_DIR=""
-for base in "$HOME/.claude" ".claude"; do
-  hit="$(find "$base" -path '*/cc-usage-classifier/SKILL.md' 2>/dev/null | head -1)"
-  if [ -n "$hit" ]; then SKILL_DIR="$(dirname "$hit")"; break; fi
-done
-echo "SKILL_DIR=$SKILL_DIR"
-```
-
-If both lookups come up empty, use the absolute path of the folder this file
-lives in (the path Claude Code reported when loading this skill).
-
----
-
-## Step 0 — Confirm pricing is filled in
-
-The cost numbers are only meaningful if `pricing.json` has real rates.
-
-1. `Read` `$SKILL_DIR/pricing.json`.
-2. If every rate is still `0.0`, tell the user costs will be **$0.00** until
-   they fill in `pricing.json` (USD per million tokens, per model id), and ask
-   whether to proceed anyway or pause so they can edit it. Do **not** invent
-   rates. If they want public list prices, offer to fill them but get
-   confirmation of the exact figures first.
-3. Note any model ids in their data that aren't priced (the engine matches
-   version-specific keys first — exact id, then date-stripped version, then a
-   coarse `claude-<family>-<major>-x` fallback). Versions matter: e.g. Opus
-   4.5–4.8 are a different tier from Opus 4.0/4.1, so don't price by family.
+Paths: scripts live in `${CLAUDE_SKILL_DIR}/scripts/`. Shell variables do not
+persist between Bash calls, so wherever this file says `<OUT_DIR>`, write the
+literal `out_dir` value printed by Step 1, always inside double quotes.
 
 ---
 
 ## Step 1 — Extract (deterministic)
 
-Run the extractor. It reads every transcript, deduplicates usage per
-`requestId` per model, computes repo/branch/features/identifiers/outcome
-signals, and writes bounded classifier payloads.
+User arguments must never be interpreted by the shell. Hand them to the
+extractor through a file, which it splits with `shlex` and validates against a
+flag allowlist (unknown flags, positionals, bad dates/numbers, and paths with
+shell-special characters are rejected with exit code 2).
 
-```bash
-python3 "$SKILL_DIR/scripts/extract.py" \
-  ${ARGUMENTS:-} \
-  2>/tmp/cc_extract.err
-```
+1. Run `mkdir -p "$HOME/.claude/cc-usage-classifier" && echo "$HOME"`.
+2. With the `Write` tool, write `<HOME>/.claude/cc-usage-classifier/args-${CLAUDE_SESSION_ID}.txt`
+   containing the user's arguments, which are (verbatim, between the fences):
 
-Pass through any user arguments: `--projects-dir`, `--jira-projects`,
-`--redact-prompts`, `--no-incremental`, and the **date-range** flags below.
-Default output dir is `~/.claude/cc-usage-classifier/out`.
+   ```
+   $ARGUMENTS
+   ```
 
-**Date / time range.** When the user asks for a window ("last 30 days", "since
-May 1", "between two dates"), translate it to the extractor's flags — a session
-is included when its activity window overlaps the range:
+   If they are already flags, copy them unchanged. If they are plain language
+   ("last 30 days", "since May 1", "only ABC tickets"), write the equivalent
+   flags instead. If empty, write an empty file. Allowed flags:
 
-- `--last-days N` — e.g. `--last-days 30` for the last 30 days (UTC).
-- `--since YYYY-MM-DD` and/or `--until YYYY-MM-DD` — explicit bounds (also
-  accept full ISO 8601 timestamps; a date-only `--until` includes the whole
-  day). `--since` overrides `--last-days` if both are given.
+   | Flag | Value |
+   |---|---|
+   | `--last-days N` | number of days back from now (UTC) |
+   | `--since D` / `--until D` | `YYYY-MM-DD` or ISO 8601; date-only `--until` includes the whole day; `--since` wins over `--last-days` |
+   | `--projects-dir P` | transcripts root (default `~/.claude/projects`) |
+   | `--out-dir P` | output dir (default `~/.claude/cc-usage-classifier/out`) |
+   | `--jira-projects A,B` | Jira project-key allowlist |
+   | `--redact-prompts` | store no prompt/assistant/bash text |
+   | `--no-incremental` | reclassify everything |
 
-Filtering happens at extraction, so every downstream output (`sessions.*`,
-`summary.md`, costs, roll-ups) is automatically scoped to the chosen window.
-If the user didn't specify a range, run without these flags (all sessions).
+3. Run:
 
-The command prints JSON: `{ "todo": [...], "cached": [...], "total": N,
-"out_dir": "...", "extracted": "...", "range": {since, until,
-skipped_out_of_range} }`. Mention the `range` back to the user so they can see
-how many sessions fell outside the window.
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/scripts/extract.py" --args-file "$HOME/.claude/cc-usage-classifier/args-${CLAUDE_SESSION_ID}.txt"
+   ```
 
-- `todo` = sessions that are new or changed → need (re)classification.
+If it exits 2, the arguments were rejected: return the error and the flag
+table above as your result and stop (do not fall back to an unscoped run — a
+wrong range misreports and spends classification calls).
+
+The extractor reads every transcript, deduplicates usage per `requestId` per
+model, splits out long-context requests for tiered pricing, computes
+repo/branch/features/identifiers/outcome signals, and prints JSON:
+`{ "todo": [...], "cached": [...], "total": N, "out_dir": "...",
+"batches": [...], "classifications_dir": "...", "range": {since, until,
+skipped_out_of_range} }`. Warnings also go to `<OUT_DIR>/logs/extract.log`.
+
+- `todo` = new or changed sessions → need (re)classification. Any stale
+  classification file for them has already been deleted.
 - `cached` = unchanged sessions → **do not reclassify** (incremental).
+- `batches` = `<OUT_DIR>/batches/batch-NNN.json` files, each a JSON array of
+  at most 20 todo sessions' classifier inputs (and ~150 KB).
 
-Capture `out_dir` and the `todo` list. If `total` is 0, tell the user no
-transcripts were found (and that `--projects-dir` can point elsewhere) and stop.
+A session is in range when its activity window overlaps the range. Filtering
+happens here, so every downstream output is scoped to the window. If `total`
+is 0, return that no transcripts were found (and that `--projects-dir` can
+point elsewhere) and stop.
 
 ---
 
-## Step 2 — Classify each todo session with a Haiku subagent
-
-For **every session_id in `todo`**, spawn a Haiku subagent. Run them in
-**parallel batches** (up to ~6 Task calls per message) for throughput. Skip
-sessions in `cached` entirely.
-
-For each session, first pull its record from `extracted.jsonl`:
+## Step 2 — Check pricing coverage
 
 ```bash
-python3 - "$OUT_DIR/extracted.jsonl" "$SESSION_ID" <<'PY'
-import json,sys
-path,sid=sys.argv[1],sys.argv[2]
-for line in open(path):
-    r=json.loads(line)
-    if r["session_id"]==sid:
-        print(json.dumps({
-            "session_id": r["session_id"],
-            "classifier_payload": r["classifier_payload"],
-            "outcome_signals": r["outcome_signals"],
-            "identifier_candidates": r["identifier_candidates"],
-            "features": r["features"],
-            "repo": r["repo"], "branch": r["branch"],
-        }, ensure_ascii=False))
-        break
-PY
+python3 "${CLAUDE_SKILL_DIR}/scripts/cost.py" --in "<OUT_DIR>/extracted.jsonl" --check-unpriced
 ```
 
-Then spawn the subagent with the `Task` tool, **pinned to a Haiku model**
-(`model: claude-haiku-4-5`), passing it the JSON above **and** the taxonomy.
-Read `$SKILL_DIR/references/taxonomy.md` once and include its content in each
-prompt (or instruct the subagent to read that exact path).
-
-Subagent prompt template:
-
-> You are a strict JSON classifier for one Claude Code session. Apply the
-> taxonomy below. Return **only** a single JSON object, no prose, no code
-> fences.
->
-> Taxonomy:
-> ```
-> <contents of references/taxonomy.md>
-> ```
->
-> Session data:
-> ```json
-> <the per-session JSON from above>
-> ```
->
-> Output exactly this shape:
-> ```json
-> {
->   "tags": ["<one or more taxonomy tags>"],
->   "summary": "<1–2 sentences on what was requested>",
->   "outcome": "successful|partial|abandoned|unknown",
->   "outcome_confidence": 0.0,
->   "outcome_justification": "<one line citing the specific signals used>",
->   "identifiers": [ {"type":"jira|github_pr","value":"...","confidence":"..."} ]
-> }
-> ```
-> Rules: tags MUST come from the taxonomy; emit multiple when the session spans
-> multiple activities — do not force one. Anchor `successful` on hard signals
-> (commit_created, tests_passed, pr_created); prefer `unknown` over guessing.
-> Only keep identifiers present in identifier_candidates; drop false positives.
-
-When a subagent returns, **write its JSON verbatim** to
-`$OUT_DIR/classifications/<session_id>.json` (create the dir if needed). If a
-subagent returns malformed JSON, retry once; if it still fails, write a
-minimal `{"tags":[],"outcome":"unknown","outcome_confidence":0.2,
-"summary":"","outcome_justification":"classifier failed"}` so the pipeline
-still completes, and note it.
-
-Do not classify `cached` sessions — their prior classification is reused
-automatically by Step 3.
+This lists model ids in the data with no rate in
+`${CLAUDE_SKILL_DIR}/pricing.json` and their share of all tokens. Do not
+invent rates and do not stop: unpriced models are left at $0.00, `report.py`
+puts a warning banner at the top of `summary.md` when they exceed 5% of
+tokens, and you repeat that warning in your final result. Matching is
+version-specific (exact id → date-stripped id → a `claude-<family>-<major>-x`
+key only if one is defined); tiers differ within a major version, so never
+price one version as another.
 
 ---
 
-## Step 3 — Merge, price, and roll up
+## Step 3 — Classify todo sessions in batches (Haiku subagents)
+
+Skip this step if `todo` is empty. Never classify `cached` sessions.
+
+For each path in `batches`, spawn one subagent with the `Agent` tool
+(`subagent_type: general-purpose`, `model: haiku`). Send **4–6 Agent calls per
+message** in parallel, wait for them, then send the next group. Prompt
+template (fill in the three paths literally):
+
+> You classify Claude Code sessions. Work only from the files named here.
+>
+> 1. Read the taxonomy: `${CLAUDE_SKILL_DIR}/references/taxonomy.md`.
+> 2. Read the batch file `<BATCH_PATH>`: a JSON array of sessions, each with
+>    `session_id`, `classifier_payload`, `outcome_signals`,
+>    `identifier_candidates`, `features`, `repo`, `branch`. If the file is
+>    longer than one Read returns, keep reading with `offset` until the end.
+> 3. For **each** session, use the Write tool to create
+>    `<OUT_DIR>/classifications/<session_id>.json` containing only this JSON
+>    object (no prose, no code fences):
+>    `{"session_id": "...", "tags": ["<one or more taxonomy tags>"],
+>    "summary": "<1–2 sentences on what was requested>",
+>    "outcome": "successful|partial|abandoned|unknown",
+>    "outcome_confidence": 0.0,
+>    "outcome_justification": "<one line citing the specific signals used>",
+>    "identifiers": [{"type": "jira|github_pr", "value": "...", "confidence": "..."}]}`
+>
+> Rules: tags MUST be taxonomy tags; emit several when the session spans
+> several activities — do not force one. Anchor `successful` on hard signals
+> (`commit_created`, `tests_passed`, `pr_created`); prefer `unknown` over
+> guessing. Keep only identifiers present in `identifier_candidates`; drop
+> false positives. `outcome_confidence` is a number in [0, 1].
+>
+> Reply with one line: `wrote N of M` plus any session_ids you could not
+> classify. Do not repeat the classifications in your reply. If the Write tool
+> is denied, instead reply with one classification JSON object per line
+> (JSONL, each with its `session_id`) and nothing else.
+
+If a subagent returns JSONL instead of writing files, write each line to
+`<OUT_DIR>/classifications/<session_id>.json` yourself.
+
+When all batches are done, validate:
 
 ```bash
-python3 "$SKILL_DIR/scripts/report.py" --out-dir "$OUT_DIR" \
-  --pricing "$SKILL_DIR/pricing.json" 2>/tmp/cc_report.err
+python3 "${CLAUDE_SKILL_DIR}/scripts/validate.py" --out-dir "<OUT_DIR>" --write-retry-batch
+```
+
+It checks every batched session's file against the schema and the taxonomy
+tags and prints `{expected, ok, missing, malformed, retry_batches}`. If
+`retry_batches` is non-empty, run **one** retry round: one subagent per retry
+file, same prompt. Then run it once more with `--quarantine` (instead of
+`--write-retry-batch`): files still malformed move to
+`classifications/invalid/`, and `report.py` gives those and any still-missing
+sessions the deterministic fallback (tags `[]`, outcome from hard signals).
+Count them for the final result.
+
+---
+
+## Step 4 — Merge, price, and roll up
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/report.py" --out-dir "<OUT_DIR>" --pricing "${CLAUDE_SKILL_DIR}/pricing.json"
 ```
 
 This merges each session's classification (fresh subagent JSON → cache →
-deterministic fallback), applies **per-model** pricing, and writes:
+deterministic fallback), applies **per-model** pricing (including the
+long-context tier where a rate card defines one), and writes:
 
-- `$OUT_DIR/sessions.jsonl` — full enriched record incl. per-model token/cost.
-- `$OUT_DIR/sessions.csv` — flattened; tags as a `|`-delimited list.
-- `$OUT_DIR/summary.md` — roll-ups (grand totals deduped; per-tag **non-additive**;
-  by model / outcome / repo / day / week; feature adoption).
+- `<OUT_DIR>/sessions.jsonl` — full enriched record incl. per-model token/cost.
+- `<OUT_DIR>/sessions.csv` — flattened; tags as a `|`-delimited list.
+- `<OUT_DIR>/summary.md` — unpriced-model banner (if any), roll-ups (grand
+  totals deduped; per-tag **non-additive**; by model / outcome / repo / day /
+  week; feature adoption).
 
-Check `/tmp/cc_report.err` for `WARNING: unpriced model` lines and surface them.
+Warnings (`WARNING: unpriced model`, long-context tier not applied) go to
+stderr and `<OUT_DIR>/logs/report.log`; carry them into the final result.
 
 `report.py` leaves an empty **`## Insights & assessment`** section at the end of
 `summary.md`, bounded by `<!-- INSIGHTS:START -->` / `<!-- INSIGHTS:END -->`.
@@ -202,14 +191,14 @@ You fill it in next.
 
 ---
 
-## Step 4 — Write data-driven insights into the report
+## Step 5 — Write data-driven insights into the report
 
-Now `Read` `$OUT_DIR/sessions.csv` (one row per session: `tags`, `outcome`,
+`Read` `<OUT_DIR>/sessions.csv` (one row per session: `tags`, `outcome`,
 `outcome_confidence`, `models_used`, `session_cost_usd`, `repo`, `skills`,
-`subagents_used`, `day`, …) and the tables already in `$OUT_DIR/summary.md`.
-Synthesise concise insights and **replace the text between the
-`<!-- INSIGHTS:START -->` and `<!-- INSIGHTS:END -->` markers** in
-`summary.md` (use `Edit`; keep the markers).
+`subagents_used`, `day`, …), the tables already in `<OUT_DIR>/summary.md`, and
+`${CLAUDE_SKILL_DIR}/pricing.json`. Synthesise concise insights and **replace
+the text between the `<!-- INSIGHTS:START -->` and `<!-- INSIGHTS:END -->`
+markers** in `summary.md` (use `Edit`; keep the markers).
 
 Write 4 short subsections. **Every claim must cite a number from the data**
 (session counts, $ amounts, percentages, model ids) — no generic advice.
@@ -219,13 +208,18 @@ Write 4 short subsections. **Every claim must cite a number from the data**
    concentrate spend. Use the by-tag table but restate it as prose, and respect
    that tags are **non-additive**.
 2. **Models being used** — the per-model token/cost split; which model carries
-   most spend; subagent (Haiku) vs main-agent (Sonnet/Opus) usage if present.
+   most spend; subagent vs main-agent usage if present.
 3. **Value / ROI assessment, factoring in model choice** — this is the point.
-   Judge whether the model tier fits the work and outcome. Look for:
-   - **Over-powered work**: expensive-tier sessions (e.g. Opus 4.x at $5–15/MTok
-     input) spent on low-complexity tags (`documentation`, `analysis/design`,
-     `research`, simple Q&A) that a cheaper tier (Sonnet/Haiku) likely handles —
-     quantify the $ at stake and name the candidate downgrade.
+   Judge whether the model tier fits the work and outcome. Rank tiers by the
+   actual per-MTok rates in `pricing.json` for the models present (the
+   `priced_as` key in each `cost_by_model` entry) — never quote rates from
+   memory. Families run Fable/Mythos → Opus → Sonnet → Haiku, but rates move
+   between versions (a newer Opus can be cheaper than an older one), so
+   compare the numbers. Look for:
+   - **Over-powered work**: top-rate sessions spent on low-complexity tags
+     (`documentation`, `analysis/design`, `research`, simple Q&A) that a
+     cheaper priced model likely handles — quantify the $ at stake by
+     re-pricing those tokens at the cheaper model's rates, and name it.
    - **Low-return spend**: sessions with high cost but `abandoned`/`partial`
      outcomes, or expensive sessions with low `outcome_confidence` — call out
      the wasted $.
@@ -237,39 +231,47 @@ Write 4 short subsections. **Every claim must cite a number from the data**
    Frame ROI as *value delivered relative to model cost*, and be **calibrated**:
    a one-off $0.50 session is not worth optimising; a recurring pattern of
    $X across N sessions is. Give **specific, actionable** recommendations
-   (e.g. "route doc-only sessions to Sonnet — would have saved ~$Y across N
-   sessions") and flag where the data is too thin to conclude.
-4. **Caveats** — note pricing assumptions (list prices unless edited), the
-   heuristic nature of outcome/agent-team signals, and any unpriced models, so
-   the assessment isn't over-trusted.
+   (e.g. "route doc-only sessions to <cheaper model> — would have saved ~$Y
+   across N sessions") and flag where the data is too thin to conclude.
+4. **Caveats** — pricing assumptions (list prices from `pricing.json`; fast
+   mode, batch and data-residency pricing not modelled), the heuristic nature
+   of outcome/agent-team signals, classifier fallbacks, and any unpriced
+   models with their token share, so the assessment isn't over-trusted.
 
 Keep the whole section tight (roughly 150–350 words). Do not alter the
 deterministic tables above the Insights section.
 
 ---
 
-## Step 5 — Report back
+## Step 6 — Final result
 
-`Read` `$OUT_DIR/summary.md` and present the highlights to the user:
+Your final message is the deliverable. `Read` `<OUT_DIR>/summary.md` and
+return:
 
+- Any **unpriced-model warning** first (models + token share), if present.
+- Scope and assumptions: the flags used (or "all sessions, default paths"),
+  the `range` from Step 1 incl. sessions skipped out of range, how
+  plain-language arguments were translated, and how many sessions got the
+  deterministic fallback.
 - Grand totals (sessions, tokens, cost) — note these are **deduplicated**.
-- The **by-model** cost split (e.g. Haiku-subagent spend vs Sonnet/Opus main).
-- The **by-tag** table, explicitly reminding the user it is **non-additive**
-  (multi-tag sessions are counted under each tag, so the columns intentionally
-  exceed the grand total — it is not a partition).
+- The **by-model** cost split.
+- The **by-tag** table, explicitly noting it is **non-additive** (multi-tag
+  sessions are counted under each tag, so the column intentionally exceeds the
+  grand total — it is not a partition).
 - Outcome distribution and feature-adoption shares.
-- The **Insights & assessment** you wrote in Step 4 — especially the model-choice
-  ROI findings (over-powered work, low-return spend, good-fit spend) with the
-  specific dollar figures and any recommended model routing.
-- Point them at `sessions.jsonl` / `sessions.csv` for the full data, and at
-  `pricing.json` / `references/taxonomy.md` as the two tuning knobs.
+- The **Insights & assessment** from Step 5 — especially the model-choice ROI
+  findings with the specific dollar figures and any recommended routing.
+- Paths to `summary.md`, `sessions.jsonl` / `sessions.csv`, and the two tuning
+  knobs: `pricing.json` and `references/taxonomy.md`.
 
 ---
 
 ## Invariants — do not violate
 
 - **Local only.** Everything runs on-machine; subagents see only the bounded
-  payloads, never raw transcripts or file contents.
+  batch payloads, never raw transcripts or file contents.
+- **No shell interpretation of user text.** Arguments reach `extract.py` only
+  via `--args-file`; never paste them into a command line.
 - **Per-model accounting.** Token totals and cost are aggregated per model id
   then summed. A model with no price is warned about, never priced as another.
 - **Deduplicate by requestId** before summing usage (the extractor does this;
@@ -278,7 +280,7 @@ deterministic tables above the Insights section.
 - **Incremental.** Never reclassify a `cached` session. Re-runs must re-use the
   cache and only spend Haiku calls on changed/new sessions.
 - **Model only for judgement.** Tags, summary, and the outcome verdict come
-  from the subagent. Everything else (parsing, dedup, cost maths, repo/branch,
+  from the subagents. Everything else (parsing, dedup, cost maths, repo/branch,
   identifier regex, feature detection, outcome *signals*) is the deterministic
   Python — do not recompute it yourself.
 - **Multi-tag must not inflate the grand total.** Grand totals count each
@@ -290,6 +292,11 @@ deterministic tables above the Insights section.
   outputs (counts and tool summaries remain) — use it when prompt text must not
   be stored.
 - `references/taxonomy.md` is the classification rubric; edit it to retune tags
-  and outcome definitions without code changes.
+  and outcome definitions without code changes (`validate.py` reads the tag
+  list from its `## Tags` section).
+- `pricing.json` rate cards may carry a `long_context` block
+  (`threshold_tokens` + rates): requests whose prompt (input + cache read +
+  cache write) exceeds the threshold are billed at those rates.
+- Tests: `python3 -m unittest discover -s "${CLAUDE_PLUGIN_ROOT}/tests" -v`.
 - `ccusage` is **not** used by this skill at runtime; it was only a
   development-time check that the per-model token aggregation reconciles.

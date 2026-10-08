@@ -1,0 +1,2 @@
+{"type": "user", "timestamp": "2026-10-01T08:00:00.000Z", "cwd": "/home/dev/beta", "gitBranch": "main", "message": {"role": "user", "content": "Explain the auth flow"}}
+{"type": "assistant", "timestamp": "2026-10-01T08:00:10.000Z", "requestId": "req_s1", "cwd": "/home/dev/beta", "gitBranch": "main", "message": {"id": "msg_req_s1", "role": "assistant", "model": "claude-sonnet-4-6", "usage": {"input_tokens": 1000, "output_tokens": 100}, "content": [{"type": "text", "text": "The auth flow works like this."}]}}

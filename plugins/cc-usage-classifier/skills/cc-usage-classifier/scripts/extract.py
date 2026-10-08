@@ -21,19 +21,32 @@ Key correctness facts (confirmed against real transcripts + ccusage):
 Usage:
   python3 extract.py [--projects-dir DIR] [--out-dir DIR]
                      [--jira-projects ABC,DEF] [--redact-prompts]
-                     [--no-incremental]
+                     [--no-incremental] [--last-days N]
+                     [--since D] [--until D] [--batch-size N]
+  python3 extract.py --args-file FILE     # raw user argument string in FILE
+  python3 extract.py --args-string STR    # same, inline (tests / manual use)
+  python3 extract.py ... --check-args     # print resolved args; no side effects
+  --pricing PATH (default ../pricing.json) supplies long_context thresholds.
+
+User text is split with shlex (never a shell) and validated against the flag
+allowlist above; unknown flags, positionals and unsafe path characters are
+rejected (exit 2).
 
 Outputs (under --out-dir, default ~/.claude/cc-usage-classifier/out):
-  extracted.jsonl   one intermediate record per session
-  cache.json        {session_id: {hash, classification?}} for incremental runs
-Stdout: JSON {"todo": [...session_ids needing classification...],
-              "cached": [...], "total": N, "out_dir": "..."}
+  extracted.jsonl          one intermediate record per session
+  cache.json               {session_id: {hash, classification?}} (incremental)
+  batches/batch-NNN.json   todo sessions' classifier inputs, <= --batch-size
+                           sessions and ~150KB per file
+  logs/extract.log         warnings + run summary
+Stdout: JSON {"todo": [...], "cached": [...], "total": N, "out_dir": "...",
+              "batches": [...], "classifications_dir": "...", "range": {...}}
 """
 
 import argparse
 import hashlib
 import json
 import re
+import shlex
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -41,6 +54,28 @@ from pathlib import Path
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_OUT_DIR = Path.home() / ".claude" / "cc-usage-classifier" / "out"
+DEFAULT_PRICING = Path(__file__).resolve().parent.parent / "pricing.json"
+
+# classifier batches: sessions per subagent, and a payload cap per batch file
+DEFAULT_BATCH_SIZE = 20
+DEFAULT_BATCH_MAX_BYTES = 150_000  # ~40K tokens; one oversize session still
+                                   # gets a batch of its own
+
+# Paths may be interpolated into shell commands by the skill (double-quoted),
+# so refuse characters that are special inside double quotes or are
+# control/quote characters. Spaces are fine.
+SAFE_PATH_RE = re.compile(r"^[\w ./~+@:,=%-]+$")
+JIRA_LIST_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{1,9}(,[A-Za-z][A-Za-z0-9]{1,9})*$")
+
+_LOG_FH = None
+
+
+def log(msg):
+    """Warning/diagnostic line: stderr plus <out-dir>/logs/extract.log."""
+    print(msg, file=sys.stderr)
+    if _LOG_FH is not None:
+        _LOG_FH.write(msg + "\n")
+        _LOG_FH.flush()
 
 # --- bounds for the classifier payload (no raw files / full tool output) ---
 MAX_PROMPTS = 80
@@ -87,9 +122,11 @@ def parse_ts(ts):
     if not ts:
         return None
     try:
-        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
     except Exception:
         return None
+    # naive timestamps are UTC; mixing naive/aware would raise on compare
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def parse_arg_dt(s, end_of_day=False):
@@ -168,7 +205,7 @@ def iter_entries(paths):
                     except json.JSONDecodeError:
                         continue  # partial/streaming line — skip
         except OSError as exc:
-            print(f"Warning: cannot read {path}: {exc}", file=sys.stderr)
+            log(f"Warning: cannot read {path}: {exc}")
 
 
 def file_hash(paths):
@@ -234,16 +271,62 @@ def is_human_prompt(entry):
     return True
 
 
-def extract_session(session_id, paths, args):
+def _zero_tokens():
+    return {"input": 0, "output": 0, "cache_read": 0,
+            "cache_write_5m": 0, "cache_write_1h": 0, "cache_write": 0}
+
+
+def request_tokens(u):
+    """Token buckets for one deduplicated request's usage object."""
+    t = _zero_tokens()
+    t["input"] = u.get("input_tokens", 0) or 0
+    t["output"] = u.get("output_tokens", 0) or 0
+    t["cache_read"] = u.get("cache_read_input_tokens", 0) or 0
+    cc = u.get("cache_creation")
+    if isinstance(cc, dict):
+        t["cache_write_5m"] = cc.get("ephemeral_5m_input_tokens", 0) or 0
+        t["cache_write_1h"] = cc.get("ephemeral_1h_input_tokens", 0) or 0
+    else:
+        t["cache_write"] = u.get("cache_creation_input_tokens", 0) or 0
+    return t
+
+
+def prompt_tokens(t):
+    """Prompt size of one request = everything except output."""
+    return sum(v for k, v in t.items() if k != "output")
+
+
+def load_long_context_thresholds(pricing_path):
+    """All long_context.threshold_tokens values in pricing.json (sorted)."""
+    try:
+        data = json.loads(Path(pricing_path).read_text())
+    except (OSError, ValueError) as exc:
+        log(f"Warning: cannot read pricing {pricing_path}: {exc} — "
+            "long-context tiers will not be split")
+        return []
+    out = set()
+    for k, v in data.items():
+        if k.startswith("_") or not isinstance(v, dict):
+            continue
+        lc = v.get("long_context")
+        if isinstance(lc, dict) and lc.get("threshold_tokens"):
+            out.add(int(lc["threshold_tokens"]))
+    return sorted(out)
+
+
+def _clean(tok):
+    return {k: v for k, v in tok.items() if v}
+
+
+def extract_session(session_id, paths, args, thresholds=()):
     entries = list(iter_entries(paths))
     if not entries:
         return None
 
     # --- identity / per-model usage (deduped) ---
-    per_model = defaultdict(lambda: {
-        "input": 0, "output": 0, "cache_read": 0,
-        "cache_write_5m": 0, "cache_write_1h": 0, "cache_write": 0,
-    })
+    per_model = defaultdict(_zero_tokens)
+    # model -> str(threshold) -> tokens of requests whose prompt > threshold
+    long_ctx = defaultdict(lambda: defaultdict(_zero_tokens))
     seen_turn = set()          # (requestId | message.id) -> counted once
     seen_tooluse = set()       # tool_use block ids
     models_used = set()
@@ -293,17 +376,16 @@ def extract_session(session_id, paths, args):
             if model not in SYNTHETIC_MODELS and turn_key and turn_key not in seen_turn:
                 seen_turn.add(turn_key)
                 models_used.add(model)
-                u = msg.get("usage", {}) or {}
+                rt = request_tokens(msg.get("usage", {}) or {})
                 pm = per_model[model]
-                pm["input"] += u.get("input_tokens", 0) or 0
-                pm["output"] += u.get("output_tokens", 0) or 0
-                pm["cache_read"] += u.get("cache_read_input_tokens", 0) or 0
-                cc = u.get("cache_creation")
-                if isinstance(cc, dict):
-                    pm["cache_write_5m"] += cc.get("ephemeral_5m_input_tokens", 0) or 0
-                    pm["cache_write_1h"] += cc.get("ephemeral_1h_input_tokens", 0) or 0
-                else:
-                    pm["cache_write"] += u.get("cache_creation_input_tokens", 0) or 0
+                for k, v in rt.items():
+                    pm[k] += v
+                ptok = prompt_tokens(rt)
+                for th in thresholds:
+                    if ptok > th:
+                        bucket = long_ctx[model][str(th)]
+                        for k, v in rt.items():
+                            bucket[k] += v
             # walk content blocks (NOT deduped — distinct calls per turn)
             for block in content if isinstance(content, list) else []:
                 if not isinstance(block, dict):
@@ -438,8 +520,9 @@ def extract_session(session_id, paths, args):
     # round/clean per_model: drop all-zero models, drop empty cache buckets
     pm_out = {}
     for model, tok in per_model.items():
-        cleaned = {k: v for k, v in tok.items() if v}
-        pm_out[model] = cleaned or {"input": 0}
+        pm_out[model] = _clean(tok) or {"input": 0}
+    lc_out = {m: {th: _clean(t) for th, t in by_th.items()}
+              for m, by_th in long_ctx.items()}
 
     payload = {
         "human_prompts": human_prompts if not args.redact_prompts else [],
@@ -461,6 +544,10 @@ def extract_session(session_id, paths, args):
         "assistant_turn_count": assistant_turns,
         "file_hash": file_hash(paths),
         "tokens_by_model": pm_out,
+        # subset of tokens_by_model: requests whose prompt exceeded a
+        # pricing.json long_context threshold (cost.py prices these)
+        "long_context_thresholds": list(thresholds),
+        "long_context_tokens_by_model": lc_out,
         "repo": {"name": repo_name, "source": repo_source},
         "branch": {
             "starting_branch": starting_branch,
@@ -534,26 +621,161 @@ def extract_identifiers(corpus, jira_projects):
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Deterministic CC transcript extractor")
-    ap.add_argument("--projects-dir", default=str(DEFAULT_PROJECTS_DIR))
-    ap.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
-    ap.add_argument("--jira-projects", default=None,
+def _path_arg(value):
+    if not SAFE_PATH_RE.match(value or ""):
+        raise argparse.ArgumentTypeError(
+            f"unsafe or empty path {value!r} (allowed: letters, digits, "
+            "space and ./~+@:,=%-_)")
+    return value
+
+
+def _days_arg(value):
+    try:
+        n = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {value!r}")
+    if not (0 < n <= 36500):
+        raise argparse.ArgumentTypeError(f"out of range: {value!r}")
+    return n
+
+
+def _date_arg(value):
+    try:
+        datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"bad date/time {value!r} — use YYYY-MM-DD or ISO 8601")
+    return value
+
+
+def _jira_arg(value):
+    if not JIRA_LIST_RE.match(value or ""):
+        raise argparse.ArgumentTypeError(
+            f"bad Jira project list {value!r} — use e.g. ABC,DEF")
+    return value
+
+
+def _batch_size_arg(value):
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {value!r}")
+    if not (1 <= n <= 50):
+        raise argparse.ArgumentTypeError("batch size must be 1..50")
+    return n
+
+
+def build_parser():
+    """The user-facing flag allowlist. Unknown flags / positionals error."""
+    ap = argparse.ArgumentParser(
+        prog="extract.py", allow_abbrev=False,
+        description="Deterministic CC transcript extractor",
+        epilog="Also: --args-file FILE / --args-string STR (user flags, "
+               "shlex-split and validated), --pricing PATH, --check-args.")
+    ap.add_argument("--projects-dir", type=_path_arg,
+                    default=str(DEFAULT_PROJECTS_DIR))
+    ap.add_argument("--out-dir", type=_path_arg, default=str(DEFAULT_OUT_DIR))
+    ap.add_argument("--jira-projects", type=_jira_arg, default=None,
                     help="Comma-separated Jira project allowlist (e.g. ABC,DEF)")
     ap.add_argument("--redact-prompts", action="store_true",
                     help="Do not store any prompt/assistant/bash text")
     ap.add_argument("--no-incremental", action="store_true",
                     help="Reclassify everything (ignore cache hashes)")
-    ap.add_argument("--since", default=None,
+    ap.add_argument("--since", type=_date_arg, default=None,
                     help="Only sessions active on/after this date/time "
                          "(YYYY-MM-DD or ISO 8601, UTC if no zone)")
-    ap.add_argument("--until", default=None,
+    ap.add_argument("--until", type=_date_arg, default=None,
                     help="Only sessions active on/before this date/time "
                          "(date-only includes the whole day)")
-    ap.add_argument("--last-days", type=float, default=None,
+    ap.add_argument("--last-days", type=_days_arg, default=None,
                     help="Shortcut for --since = now minus N days (UTC). "
                          "Ignored if --since is given.")
-    args = ap.parse_args()
+    ap.add_argument("--batch-size", type=_batch_size_arg,
+                    default=DEFAULT_BATCH_SIZE,
+                    help="Max sessions per classifier batch file (default 20)")
+    return ap
+
+
+def parse_args(argv=None):
+    """Parse CLI args. User-supplied text never goes through a shell: pass it
+    via --args-file PATH (preferred; the file holds the raw argument string)
+    or --args-string STR. It is split with shlex (no expansion, no
+    substitution) and validated against build_parser()'s allowlist."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    meta = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    meta.add_argument("--args-string", default=None)
+    meta.add_argument("--args-file", default=None)
+    meta.add_argument("--pricing", default=str(DEFAULT_PRICING))
+    meta.add_argument("--check-args", action="store_true")
+    m, rest = meta.parse_known_args(argv)
+    user = []
+    raw = None
+    if m.args_file is not None:
+        try:
+            raw = Path(m.args_file).expanduser().read_text(encoding="utf-8")
+        except OSError as exc:
+            raise SystemExit(f"cannot read --args-file {m.args_file}: {exc}")
+    elif m.args_string is not None:
+        raw = m.args_string
+    if raw is not None:
+        try:
+            user = shlex.split(raw, comments=False, posix=True)
+        except ValueError as exc:
+            raise SystemExit(f"cannot parse arguments {raw!r}: {exc}")
+        for tok in user:
+            if tok in ("--args-file", "--args-string", "--pricing",
+                       "--check-args") or tok.startswith(
+                           ("--args-file=", "--args-string=", "--pricing=")):
+                raise SystemExit(f"{tok} is not allowed inside the argument string")
+    args = build_parser().parse_args(rest + user)
+    args.pricing = m.pricing
+    args.check_args = m.check_args
+    return args
+
+
+def write_batches(out_dir, records_by_id, todo, batch_size,
+                  max_bytes=DEFAULT_BATCH_MAX_BYTES):
+    """Write todo sessions' classifier inputs to batches/batch-NNN.json.
+
+    JSON array, indent=1, so every long string sits on its own line (the Read
+    tool truncates very long lines). Old batch files are removed first.
+    Returns the list of batch file paths.
+    """
+    bdir = out_dir / "batches"
+    bdir.mkdir(parents=True, exist_ok=True)
+    for old in bdir.glob("*.json"):
+        old.unlink()
+    batches, cur, cur_bytes = [], [], 0
+    for sid in todo:
+        r = records_by_id[sid]
+        item = {
+            "session_id": sid,
+            "classifier_payload": r["classifier_payload"],
+            "outcome_signals": r["outcome_signals"],
+            "identifier_candidates": r["identifier_candidates"],
+            "features": r["features"],
+            "repo": r["repo"], "branch": r["branch"],
+        }
+        size = len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+        if cur and (len(cur) >= batch_size or cur_bytes + size > max_bytes):
+            batches.append(cur)
+            cur, cur_bytes = [], 0
+        cur.append(item)
+        cur_bytes += size
+    if cur:
+        batches.append(cur)
+    paths = []
+    for i, items in enumerate(batches, 1):
+        path = bdir / f"batch-{i:03d}.json"
+        path.write_text(json.dumps(items, ensure_ascii=False, indent=1),
+                        encoding="utf-8")
+        paths.append(str(path))
+    return paths
+
+
+def main(argv=None):
+    global _LOG_FH
+    args = parse_args(argv)
 
     since = parse_arg_dt(args.since)
     until = parse_arg_dt(args.until, end_of_day=True)
@@ -564,20 +786,38 @@ def main():
 
     projects_dir = Path(args.projects_dir).expanduser()
     out_dir = Path(args.out_dir).expanduser()
+
+    if args.check_args:
+        print(json.dumps({
+            "projects_dir": str(projects_dir), "out_dir": str(out_dir),
+            "since": since.isoformat() if since else None,
+            "until": until.isoformat() if until else None,
+            "jira_projects": args.jira_projects,
+            "redact_prompts": args.redact_prompts,
+            "no_incremental": args.no_incremental,
+            "batch_size": args.batch_size,
+        }, indent=2))
+        return
+
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "logs").mkdir(exist_ok=True)
+    _LOG_FH = open(out_dir / "logs" / "extract.log", "w", encoding="utf-8")
 
     if not projects_dir.exists():
-        print(f"No transcripts dir at {projects_dir}", file=sys.stderr)
-        print(json.dumps({"todo": [], "cached": [], "total": 0,
+        log(f"No transcripts dir at {projects_dir}")
+        print(json.dumps({"todo": [], "cached": [], "total": 0, "batches": [],
                           "out_dir": str(out_dir)}))
         return
+
+    thresholds = load_long_context_thresholds(args.pricing)
 
     cache_path = out_dir / "cache.json"
     cache = {}
     if cache_path.exists() and not args.no_incremental:
         try:
             cache = json.loads(cache_path.read_text())
-        except Exception:
+        except Exception as exc:
+            log(f"Warning: unreadable cache {cache_path}: {exc} — ignoring")
             cache = {}
 
     sessions = find_sessions(projects_dir)
@@ -587,7 +827,7 @@ def main():
     skipped_out_of_range = 0
     for session_id, grp in sorted(sessions.items()):
         paths = [grp["main"]] + grp["extra"]
-        rec = extract_session(session_id, paths, args)
+        rec = extract_session(session_id, paths, args, thresholds)
         if rec is None:
             continue
         if not session_in_range(rec["first_timestamp"], rec["last_timestamp"],
@@ -607,6 +847,18 @@ def main():
         for rec in records:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
+    # A todo session must be classified afresh: drop any classification file
+    # left by an earlier run, or report.py would merge the stale verdict.
+    class_dir = out_dir / "classifications"
+    class_dir.mkdir(exist_ok=True)
+    for sid in todo:
+        stale = class_dir / f"{sid}.json"
+        if stale.exists():
+            stale.unlink()
+
+    batch_paths = write_batches(out_dir, {r["session_id"]: r for r in records},
+                                todo, args.batch_size)
+
     # update cache hashes (classification filled in by report.py)
     for rec in records:
         sid = rec["session_id"]
@@ -618,16 +870,23 @@ def main():
         cache[sid] = entry
     cache_path.write_text(json.dumps(cache, indent=2))
 
-    print(json.dumps({
+    result = {
         "todo": todo, "cached": cached, "total": len(records),
         "out_dir": str(out_dir),
         "extracted": str(extracted_path),
+        "batches": batch_paths,
+        "classifications_dir": str(class_dir),
         "range": {
             "since": since.isoformat() if since else None,
             "until": until.isoformat() if until else None,
             "skipped_out_of_range": skipped_out_of_range,
         },
-    }, indent=2))
+    }
+    _LOG_FH.write(json.dumps({k: v for k, v in result.items()
+                              if k not in ("todo", "cached")}) + "\n")
+    _LOG_FH.close()
+    _LOG_FH = None
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
