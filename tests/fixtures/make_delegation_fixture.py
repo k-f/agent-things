@@ -13,7 +13,7 @@ Session sess-orch (project /work/orchestra):
   main thread   opus-5-5   4 requests (req_m2 split over two entries)
   agent aexp1   Explore, foreground, depth 1            sonnet-5-5  2 requests
   agent anest1  general-purpose, parent aexp1, depth 2  haiku-5-5   1 request
-  workflow wf_k3j9x2ab "race-audit": awf1 (Find), awf2 (Verify, runs pytest),
+  workflow wf_3c9e1a7d-4f2 "race-audit": awf1 (Find), awf2 (Verify, runs pytest),
                 awf3 (Verify, no meta file)   sonnet-5-5 x2 + haiku-5-5 x1
   legacy top-level agent-alegacy1.jsonl       haiku-4-5   1 request
   awf1 also replays req_m1 (same requestId as the main thread) -> counted once
@@ -30,7 +30,7 @@ PROJECT_KEY = "-work-orchestra"
 CWD = "/work/orchestra"
 SID = "sess-orch"
 PLAIN_SID = "sess-plain"
-RUN_ID = "wf_k3j9x2ab"
+RUN_ID = "wf_3c9e1a7d-4f2"   # real ids look like wf_b4fbf2f4-8b2
 
 EXPECTED = {
     "sessions": 2,
@@ -137,8 +137,8 @@ def build(out_projects_dir):
         assistant(SID, t(), "req_m2", O, [{"type": "text", "text": "Fanning out a workflow."}]),
         assistant(SID, t(), "req_m2", O, [tool_use("tu_w1", "Workflow", {
             "script": "export const meta = {name: 'race-audit', description: 'x'}\n"})]),
-        tool_result(SID, t(), "tu_w1", "Workflow launched in background. Task ID: tk1. "
-                                        "runId: %s" % RUN_ID),
+        tool_result(SID, t(), "tu_w1", "Workflow launched in background. Task ID: tk1\n"
+                                        "Run ID: %s" % RUN_ID),
         dict(base(SID, t()), type="user", origin={"kind": "task-notification"},
              turnOrigin="task_notification",
              message={"role": "user", "content": "<task-notification>\n<task-id>tk1</task-id>"
@@ -208,12 +208,22 @@ def build(out_projects_dir):
         assistant(SID, t(), "req_w3", H, [tool_use("tu_w3a", "Read", {"file_path": "refunds.py"})],
                   True, "awf3"),
     ])
+    # journal and sidecar in the shape a real 2.1.293 run writes
     write_jsonl(wf / "journal.jsonl", [
-        {"k": "put", "addr": "a1", "kind": "agent", "status": "settled"},
-        {"k": "settled", "addr": "a1", "status": "ok"},
+        {"type": "launched"},
+        {"type": "started", "key": "v2:aa", "agentId": "awf1", "label": "find:ledger", "phase": "Find"},
+        {"type": "result", "key": "v2:aa", "agentId": "awf1", "result": "1 race"},
     ])
     write_json(root / SID / "workflows" / (RUN_ID + ".json"), {
-        "runId": RUN_ID, "timestamp": "2026-10-01T10:06:00.000Z", "name": "race-audit"})
+        "runId": RUN_ID, "timestamp": "2026-10-01T10:06:00.000Z", "taskId": "tk1",
+        "script": "export const meta = {name: 'race-audit', description: 'x'}\n",
+        "scriptPath": "/x/workflows/scripts/race-audit-%s.js" % RUN_ID,
+        "result": {"confirmed": 1}, "agentCount": 3, "logs": [], "durationMs": 61000,
+        "summary": "x", "workflowName": "race-audit", "status": "completed",
+        "phases": [{"title": "Find"}, {"title": "Verify"}], "defaultModel": "claude-opus-5-5"})
+    (root / SID / "workflows" / "scripts").mkdir(parents=True, exist_ok=True)
+    (root / SID / "workflows" / "scripts" / ("race-audit-%s.js" % RUN_ID)).write_text(
+        "export const meta = {name: 'race-audit', description: 'x'}\n")
 
     # legacy layout: sidechain transcript as a top-level agent-*.jsonl file
     write_jsonl(root / "agent-alegacy1.jsonl", [

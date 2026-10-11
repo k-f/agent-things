@@ -6,7 +6,8 @@ This file is vendored, byte-identical, into every plugin that reads
 other). tests/test_shared_modules.py at the repo root fails if the copies drift.
 Edit one copy, then copy it over the others.
 
-On-disk layout (Claude Code 2.1.x):
+On-disk layout (Claude Code 2.1.x; workflow layout checked against a real
+run on 2.1.293, run ids look like wf_b4fbf2f4-8b2):
 
   projects/<project-key>/<session-id>.jsonl              main thread
   projects/<project-key>/<session-id>/subagents/
@@ -16,7 +17,10 @@ On-disk layout (Claude Code 2.1.x):
       workflows/<run-id>/agent-<id>.jsonl                agents of one Workflow
       workflows/<run-id>/agent-<id>.meta.json            run (run-id = wf_...)
       workflows/<run-id>/journal.jsonl                   workflow journal (internal)
-  projects/<project-key>/<session-id>/workflows/<run-id>.json   run sidecar
+  projects/<project-key>/<session-id>/workflows/<run-id>.json   run sidecar:
+      workflowName, status, agentCount, durationMs, phases [{title, model}],
+      defaultModel, script, scriptPath, result, taskId
+  projects/<project-key>/<session-id>/workflows/scripts/<name>-<run-id>.js
 
 Older versions wrote sidechain transcripts as top-level agent-<id>.jsonl files
 next to the session file; those are attached to the session named by the
@@ -169,17 +173,23 @@ class SessionFiles(object):
         return out
 
     def workflow_runs(self):
-        """{run_id: {"name", "agents", "phases", "agent_types"}} from disk."""
+        """{run_id: run} from the run sidecar and the agents on disk.
+
+        run: run_id, name, agents (transcripts found), phases (run order when
+        the sidecar lists them), agent_types, and from the sidecar when
+        present: status, agent_count (agents the run reports launching),
+        duration_ms, default_model.
+        """
         runs = {}
         for rid, side in self.workflow_sidecars.items():
-            runs[rid] = {"run_id": rid, "name": _sidecar_name(side), "agents": 0,
-                         "phases": [], "agent_types": {}}
+            runs[rid] = _new_run(rid, side)
         for a in self.agents:
             rid = a.workflow_run_id
             if not rid:
                 continue
-            r = runs.setdefault(rid, {"run_id": rid, "name": None, "agents": 0,
-                                      "phases": [], "agent_types": {}})
+            r = runs.get(rid)
+            if r is None:
+                r = runs[rid] = _new_run(rid, {})
             r["agents"] += 1
             ph = a.meta.get("workflowPhase")
             if ph and ph not in r["phases"]:
@@ -189,8 +199,24 @@ class SessionFiles(object):
         return runs
 
 
+def _new_run(rid, side):
+    phases = []
+    for ph in side.get("phases") or []:
+        title = ph.get("title") if isinstance(ph, dict) else ph
+        if isinstance(title, str) and title and title not in phases:
+            phases.append(title)
+    ac = side.get("agentCount")
+    dur = side.get("durationMs")
+    return {"run_id": rid, "name": _sidecar_name(side), "agents": 0, "phases": phases,
+            "agent_types": {},
+            "status": side.get("status") if isinstance(side.get("status"), str) else None,
+            "agent_count": ac if isinstance(ac, int) else None,
+            "duration_ms": dur if isinstance(dur, (int, float)) else None,
+            "default_model": side.get("defaultModel")}
+
+
 def _sidecar_name(side):
-    for k in ("name", "workflowName", "title"):
+    for k in ("workflowName", "name", "title"):
         v = side.get(k)
         if isinstance(v, str) and v:
             return v

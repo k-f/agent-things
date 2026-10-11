@@ -171,6 +171,8 @@ class DelegationTest(unittest.TestCase):
         wf = runs[fx.RUN_ID]
         self.assertEqual(wf["phases"], ["Find", "Verify"])
         self.assertEqual(wf["models"], ["claude-haiku-5-5", "claude-sonnet-5-5"])
+        self.assertEqual((wf["status"], wf["agent_count"], wf["duration_ms"]),
+                         ("completed", 3, 61000))
         f = r["features"]
         self.assertTrue(f["workflows_used"])
         self.assertEqual(f["workflow_runs"], 1)
@@ -285,7 +287,7 @@ class DelegationTest(unittest.TestCase):
         md = (self.out / "summary.md").read_text()
         self.assertIn("## Delegated spend", md)
         self.assertIn("### By agent type", md)
-        self.assertIn("| race-audit | `wf_k3j9x2ab` | `sess-orch` | 3 |", md)
+        self.assertIn("| race-audit | `wf_3c9e1a7d-4f2` | `sess-orch` | 3 |", md)
         self.assertIn("- Sessions: **2**", md)
         s = self.records("sessions.jsonl")
         grand = sum(r["session_cost_usd"] for r in s.values())

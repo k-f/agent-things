@@ -48,6 +48,10 @@ class SharedTranscriptsModule(unittest.TestCase):
             self.assertEqual(by_source, fx.EXPECTED["agents_by_source"])
             self.assertEqual(max(a.spawn_depth for a in s.agents), fx.EXPECTED["max_spawn_depth"])
             runs = s.workflow_runs()
+            run = runs[fx.RUN_ID]
+            self.assertEqual(run["phases"], ["Find", "Verify"])   # sidecar order, not file order
+            self.assertEqual((run["status"], run["agent_count"], run["duration_ms"]),
+                             ("completed", 3, 61000))
             self.assertEqual({k: {"name": v["name"], "agents": v["agents"]} for k, v in runs.items()},
                              fx.EXPECTED["workflow_runs"])
             kinds = {}
@@ -58,7 +62,7 @@ class SharedTranscriptsModule(unittest.TestCase):
             self.assertEqual(kinds.get("peer"), 1)
             self.assertEqual(kinds.get("task_notification"), 1)
             self.assertEqual(kinds.get("meta"), 2)
-            self.assertEqual(t.workflow_run_ids_in("runId: wf_k3j9x2ab done"), ["wf_k3j9x2ab"])
+            self.assertEqual(t.workflow_run_ids_in("Run ID: wf_b4fbf2f4-8b2\nok"), ["wf_b4fbf2f4-8b2"])
 
     def test_entry_kinds_edge_cases(self):
         t = load(COPIES[0])

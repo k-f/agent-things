@@ -706,7 +706,11 @@ def extract_session(session_id, files, args, thresholds=()):
     for rid, r in disk_runs.items():
         runs[rid] = {"run_id": rid, "name": r.get("name"), "agents": r.get("agents", 0),
                      "phases": list(r.get("phases", [])),
-                     "agent_types": dict(r.get("agent_types", {}))}
+                     "agent_types": dict(r.get("agent_types", {})),
+                     # from the run sidecar: launched-agent count can exceed the
+                     # transcripts found when agents were skipped or died early
+                     "status": r.get("status"), "agent_count": r.get("agent_count"),
+                     "duration_ms": r.get("duration_ms")}
     for rid, name in workflow_run_names.items():
         r = runs.setdefault(rid, {"run_id": rid, "name": None, "agents": 0,
                                   "phases": [], "agent_types": {}})
