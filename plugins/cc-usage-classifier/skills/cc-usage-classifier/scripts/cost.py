@@ -80,15 +80,18 @@ def _rate(rates, ttype):
     return (rates.get(rate_key, 0.0) if rate_key else 0.0) or 0.0
 
 
-def price_record(record, pricing, warn=None):
-    """Add per-model and total cost to a record. Returns the record."""
-    tokens_by_model = record.get("tokens_by_model", {}) or {}
-    long_by_model = record.get("long_context_tokens_by_model")
-    scanned = {str(t) for t in record.get("long_context_thresholds", [])}
+def price_tokens(tokens_by_model, long_by_model, scanned, pricing, warn=None):
+    """Price one {model: {token_type: n}} map.
+
+    Returns (cost_by_model, total_usd, unpriced_model_ids). long_by_model is
+    the matching long-context subset ({model: {str(threshold): tokens}}) or
+    None when extract.py did not split it; scanned is the set of thresholds
+    (as strings) it split on.
+    """
     cost_by_model = {}
     unpriced = []
     total = 0.0
-    for model, toks in tokens_by_model.items():
+    for model, toks in (tokens_by_model or {}).items():
         rates, matched = lookup_rates(model, pricing)
         if rates is None:
             unpriced.append(model)
@@ -128,9 +131,49 @@ def price_record(record, pricing, warn=None):
             entry["long_context_tokens"] = dict(long_toks)
         cost_by_model[model] = entry
         total += model_total
+    return cost_by_model, total, unpriced
+
+
+def price_record(record, pricing, warn=None):
+    """Add per-model and total cost to a record. Returns the record.
+
+    Also prices the delegation breakdowns extract.py writes, at the same
+    per-model rates: cost_by_agent_source {main, agent, workflow, team},
+    cost_usd on every agents[] row and workflow_runs[] entry,
+    cost_by_agent_type, and delegated_cost_usd (everything not on the main
+    thread). These partition session_cost_usd; they never add to it.
+    """
+    long_by_model = record.get("long_context_tokens_by_model")
+    scanned = {str(t) for t in record.get("long_context_thresholds", [])}
+    cost_by_model, total, unpriced = price_tokens(
+        record.get("tokens_by_model", {}), long_by_model, scanned, pricing, warn)
     record["cost_by_model"] = cost_by_model
     record["session_cost_usd"] = round(total, 6)
     record["unpriced_models"] = unpriced
+
+    def sub_cost(tokens, longs):
+        # warnings were already raised for the whole-session map
+        lb = None if long_by_model is None else (longs or {})
+        return round(price_tokens(tokens or {}, lb, scanned, pricing)[1], 6)
+
+    by_source = record.get("tokens_by_agent_source")
+    if isinstance(by_source, dict):
+        long_src = record.get("long_context_tokens_by_agent_source") or {}
+        record["cost_by_agent_source"] = {
+            src: sub_cost(toks, long_src.get(src)) for src, toks in by_source.items()}
+        record["delegated_cost_usd"] = round(sum(
+            v for k, v in record["cost_by_agent_source"].items() if k != "main"), 6)
+    by_type = {}
+    for a in record.get("agents") or []:
+        a["cost_usd"] = sub_cost(a.get("tokens_by_model"),
+                                 a.get("long_context_tokens_by_model"))
+        t = a.get("agent_type") or "unknown"
+        by_type[t] = round(by_type.get(t, 0.0) + a["cost_usd"], 6)
+    if record.get("agents") is not None:
+        record["cost_by_agent_type"] = by_type
+    for r in record.get("workflow_runs") or []:
+        r["cost_usd"] = sub_cost(r.get("tokens_by_model"),
+                                 r.get("long_context_tokens_by_model"))
     return record
 
 

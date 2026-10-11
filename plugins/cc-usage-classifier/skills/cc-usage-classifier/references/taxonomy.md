@@ -65,13 +65,24 @@ can carry tags from more than one top-level area.
 - Drafting a project plan or Jira tickets with no code → `business`.
 - Setting up the user's own dotfiles/editor → `personal-productivity`,
   `devops`.
+- Delegation is not an activity. When `classifier_payload.delegation` shows
+  subagents or workflow runs (e.g. a "race-audit" workflow with Find/Verify
+  phases, Explore agents mapping code), tag by the work they did, read from
+  the human prompts, agent descriptions, workflow names/phases and delegated
+  tool counts: an audit or review fan-out → `engineering`, `review`; parallel
+  agents reproducing bugs with tests → `debugging`, `testing`; agents
+  researching libraries → `research`. There is no "orchestration" tag.
 
 ---
 
 ## Outcome
 
 Pick exactly one. Anchor `successful` on **hard signals** (commit created,
-tests passed, PR created) supplied in `outcome_signals`. When signals are
+tests passed, PR created) supplied in `outcome_signals`. Signals produced by
+subagents or workflow agents count — the work was delegated, not skipped;
+`signal_sources` says which thread produced each (`main`, or
+`<source>:<agent_id>`). `tests_passed` follows the main thread when it ran
+tests (agents often run deliberately failing reproductions), else the agents'. When signals are
 weak or contradictory, prefer `unknown` over guessing. Cite the signals you
 used in a one-line justification.
 

@@ -189,6 +189,15 @@ def flatten_for_csv(rec):
         "working_branch": branch["working_branch"],
         "branch_created_in_session": branch["branch_created_in_session"],
         "subagents_used": feats["subagents_used"],
+        "subagent_count": feats.get("subagent_count", 0),
+        "workflow_runs": feats.get("workflow_runs", 0),
+        "nested_agents": feats.get("nested_agents", False),
+        "agents_stopped_by_user": feats.get("agents_stopped_by_user", 0),
+        "main_cost_usd": (rec.get("cost_by_agent_source") or {}).get(
+            "main", rec.get("session_cost_usd", 0.0)),
+        "delegated_cost_usd": rec.get("delegated_cost_usd", 0.0),
+        "agent_types": "|".join(sorted({a.get("agent_type") or "unknown"
+                                        for a in rec.get("agents") or []})),
         "agent_teams_used": feats["agent_teams_used"],
         "skills_used": feats["skills_used"],
         "skills": "|".join(feats["skills"]),
@@ -224,6 +233,85 @@ def unpriced_banner(records, pricing, threshold=UNPRICED_BANNER_SHARE):
         out.append(f"> - `{m}` — {n:,} tokens ({n / grand:.1%})")
     out.append("")
     return out
+
+
+SOURCE_LABELS = (("main", "Main thread"), ("agent", "Subagents (Agent/Task, forked skills)"),
+                 ("workflow", "Workflow agents"), ("team", "Agent-team members"))
+TOP_WORKFLOW_RUNS = 10
+
+
+def _pct(part, whole):
+    return f"{part / whole * 100:.1f}%" if whole else "—"
+
+
+def write_delegated_spend(records, grand_cost, L):
+    """'Delegated spend' section: a partition of the grand total by the
+    thread that made each request, then by agent type and workflow run."""
+    L("## Delegated spend\n")
+    L("> Each session's cost includes its subagents and workflow agents. This "
+      "section splits that same total by the thread that made each request, "
+      "so the source rows **add up to the grand total**.\n")
+    src_cost = defaultdict(float)
+    src_sessions = Counter()
+    for r in records:
+        by_src = r.get("cost_by_agent_source")
+        if not by_src:  # record from an older extract.py: all main thread
+            by_src = {"main": r.get("session_cost_usd", 0.0)}
+        for src, c in by_src.items():
+            src_cost[src] += c
+            if src == "main" or c or any(
+                    a.get("source") == src for a in r.get("agents") or []):
+                src_sessions[src] += 1
+    L("| Thread | Sessions | Cost (USD) | Share of total |")
+    L("|---|--:|--:|--:|")
+    for src, label in SOURCE_LABELS:
+        if src == "main" or src_sessions.get(src):
+            L(f"| {label} | {src_sessions.get(src, 0)} | ${src_cost[src]:.4f} | "
+              f"{_pct(src_cost[src], grand_cost)} |")
+    delegated = sum(v for k, v in src_cost.items() if k != "main")
+    L(f"| **All delegated** | {sum(1 for r in records if r.get('agents'))} | "
+      f"**${delegated:.4f}** | **{_pct(delegated, grand_cost)}** |")
+    L("")
+
+    type_rows = defaultdict(lambda: {"agents": 0, "requests": 0, "cost": 0.0,
+                                     "models": Counter(), "stopped": 0,
+                                     "sessions": set()})
+    for r in records:
+        for a in r.get("agents") or []:
+            row = type_rows[a.get("agent_type") or "unknown"]
+            row["agents"] += 1
+            row["requests"] += a.get("requests", 0)
+            row["cost"] += a.get("cost_usd", 0.0)
+            row["stopped"] += 1 if a.get("stopped_by_user") else 0
+            row["sessions"].add(r["session_id"])
+            for m in a.get("models") or []:
+                row["models"][m] += 1
+    if type_rows:
+        L("### By agent type\n")
+        L("| Agent type | Agents | Sessions | Requests | Models | Stopped by user "
+          "| Cost (USD) | Share of total |")
+        L("|---|--:|--:|--:|---|--:|--:|--:|")
+        for t, row in sorted(type_rows.items(), key=lambda kv: -kv[1]["cost"]):
+            models = ", ".join(m for m, _ in row["models"].most_common(3))
+            L(f"| {t} | {row['agents']} | {len(row['sessions'])} | {row['requests']} "
+              f"| {models} | {row['stopped']} | ${row['cost']:.4f} "
+              f"| {_pct(row['cost'], grand_cost)} |")
+        L("")
+
+    runs = [(r["session_id"], w) for r in records for w in r.get("workflow_runs") or []]
+    if runs:
+        runs.sort(key=lambda sw: -sw[1].get("cost_usd", 0.0))
+        L(f"### Top workflow runs by cost ({min(len(runs), TOP_WORKFLOW_RUNS)} of "
+          f"{len(runs)})\n")
+        L("| Workflow | Run | Session | Agents | Phases | Models | Stopped by user "
+          "| Cost (USD) |")
+        L("|---|---|---|--:|---|---|--:|--:|")
+        for sid, w in runs[:TOP_WORKFLOW_RUNS]:
+            L(f"| {w.get('name') or '(unnamed)'} | `{w['run_id']}` | `{sid}` "
+              f"| {w.get('agents', 0)} | {', '.join(w.get('phases') or []) or '—'} "
+              f"| {', '.join(w.get('models') or []) or '—'} "
+              f"| {w.get('stopped_by_user', 0)} | ${w.get('cost_usd', 0.0):.4f} |")
+        L("")
 
 
 def write_summary(records, path, pricing=None):
@@ -338,12 +426,16 @@ def write_summary(records, path, pricing=None):
         L(f"| {wk} | {wk_count[wk]} | ${wk_cost[wk]:.4f} |")
     L("")
 
+    write_delegated_spend(records, grand_cost, L)
+
     # feature adoption
     L("## Feature adoption\n")
     L("| Feature | Sessions using | Share | Cost of those sessions |")
     L("|---|--:|--:|--:|")
     for label, key in (("Subagents", "subagents_used"),
-                       ("Agent teams (heuristic)", "agent_teams_used"),
+                       ("Workflows", "workflows_used"),
+                       ("Nested agents (agent spawned by an agent)", "nested_agents"),
+                       ("Agent teams", "agent_teams_used"),
                        ("Skills", "skills_used")):
         using = [r for r in records if r["features"].get(key)]
         cost = sum(r.get("session_cost_usd", 0.0) for r in using)

@@ -22,6 +22,13 @@ spawn Haiku subagents for the judgement calls (tags, summary, outcome verdict).
 **Granularity is the session. Cost is per session, per model — never collapsed
 to one model and never apportioned across stages within a session.**
 
+A session is its main transcript **plus every agent transcript it spawned**:
+Agent/Task subagents (at any depth), forked skills, and the agents of dynamic
+workflows (Workflow tool). Their requests count toward the session's per-model
+tokens and cost, and each record also carries the split by thread
+(`tokens_by_agent_source`: main / agent / workflow / team), an `agents` list
+and `workflow_runs`. An `agent-<id>.jsonl` file is never a session of its own.
+
 You run as a forked subagent: you cannot ask the user anything mid-run, and
 your final message is the only thing they see. Never stop to ask or wait for
 confirmation — use the defaults below, proceed, and list every assumption you
@@ -72,8 +79,9 @@ If it exits 2, the arguments were rejected: return the error and the flag
 table above as your result and stop (do not fall back to an unscoped run — a
 wrong range misreports and spends classification calls).
 
-The extractor reads every transcript, deduplicates usage per `requestId` per
-model, splits out long-context requests for tiered pricing, computes
+The extractor reads every transcript (main threads and their agent
+transcripts), deduplicates usage per `requestId` per model across the whole
+session, splits out long-context requests for tiered pricing, computes
 repo/branch/features/identifiers/outcome signals, and prints JSON:
 `{ "todo": [...], "cached": [...], "total": N, "out_dir": "...",
 "batches": [...], "classifications_dir": "...", "range": {since, until,
@@ -125,6 +133,9 @@ template (fill in the three paths literally):
 >    `session_id`, `classifier_payload`, `outcome_signals`,
 >    `identifier_candidates`, `features`, `repo`, `branch`. If the file is
 >    longer than one Read returns, keep reading with `offset` until the end.
+>    `classifier_payload.delegation` (when present) summarises the subagents
+>    and workflow runs the session used; tag by the work they did, not by the
+>    fact of delegating (see the taxonomy's tagging guidance).
 > 3. For **each** session, use the Write tool to create
 >    `<OUT_DIR>/classifications/<session_id>.json` containing only this JSON
 >    object (no prose, no code fences):
@@ -180,7 +191,8 @@ long-context tier where a rate card defines one), and writes:
 - `<OUT_DIR>/sessions.csv` — flattened; tags as a `|`-delimited list.
 - `<OUT_DIR>/summary.md` — unpriced-model banner (if any), roll-ups (grand
   totals deduped; per-tag **non-additive**; by model / outcome / repo / day /
-  week; feature adoption).
+  week; **delegated spend** — main thread vs subagents vs workflow agents, by
+  agent type, top workflow runs by cost; feature adoption).
 
 Warnings (`WARNING: unpriced model`, long-context tier not applied) go to
 stderr and `<OUT_DIR>/logs/report.log`; carry them into the final result.
@@ -194,8 +206,10 @@ You fill it in next.
 ## Step 5 — Write data-driven insights into the report
 
 `Read` `<OUT_DIR>/sessions.csv` (one row per session: `tags`, `outcome`,
-`outcome_confidence`, `models_used`, `session_cost_usd`, `repo`, `skills`,
-`subagents_used`, `day`, …), the tables already in `<OUT_DIR>/summary.md`, and
+`outcome_confidence`, `models_used`, `session_cost_usd`, `main_cost_usd`,
+`delegated_cost_usd`, `subagent_count`, `workflow_runs`, `agent_types`,
+`agents_stopped_by_user`, `repo`, `skills`, `day`, …), the tables already in
+`<OUT_DIR>/summary.md` (including **Delegated spend**), and
 `${CLAUDE_SKILL_DIR}/pricing.json`. Synthesise concise insights and **replace
 the text between the `<!-- INSIGHTS:START -->` and `<!-- INSIGHTS:END -->`
 markers** in `summary.md` (use `Edit`; keep the markers).
@@ -208,7 +222,8 @@ Write 4 short subsections. **Every claim must cite a number from the data**
    concentrate spend. Use the by-tag table but restate it as prose, and respect
    that tags are **non-additive**.
 2. **Models being used** — the per-model token/cost split; which model carries
-   most spend; subagent vs main-agent usage if present.
+   most spend; main thread vs subagents vs workflow agents (the Delegated
+   spend table) and which agent types carry the delegated $.
 3. **Value / ROI assessment, factoring in model choice** — this is the point.
    Judge whether the model tier fits the work and outcome. Rank tiers by the
    actual per-MTok rates in `pricing.json` for the models present (the
@@ -228,6 +243,15 @@ Write 4 short subsections. **Every claim must cite a number from the data**
      cheap models doing a lot — affirm these.
    - **Appropriately matched**: note where tier and work align so the user
      isn't told to change something that's fine.
+   - **Delegation ROI**: judge the delegated spend, not just its size.
+     Workflow fan-outs or Explore agents on cheap models doing breadth work
+     while the main thread stays on Opus is usually good routing — affirm it
+     with the $ split. Flag expensive agent types (top-rate models, many
+     requests) on low-complexity work or in sessions that ended
+     `abandoned`/`partial`; workflow runs with many agents but little outcome
+     (no commit/tests/PR from any thread); and runs or sessions with many
+     `stopped_by_user` agents (spend the user cut off). Re-price where useful
+     (e.g. "the 12 general-purpose agents on Opus would cost ~$Y on Sonnet").
    Frame ROI as *value delivered relative to model cost*, and be **calibrated**:
    a one-off $0.50 session is not worth optimising; a recurring pattern of
    $X across N sessions is. Give **specific, actionable** recommendations
@@ -235,7 +259,7 @@ Write 4 short subsections. **Every claim must cite a number from the data**
    across N sessions") and flag where the data is too thin to conclude.
 4. **Caveats** — pricing assumptions (list prices from `pricing.json`; fast
    mode, batch and data-residency pricing not modelled), the heuristic nature
-   of outcome/agent-team signals, classifier fallbacks, and any unpriced
+   of outcome signals, classifier fallbacks, and any unpriced
    models with their token share, so the assessment isn't over-trusted.
 
 Keep the whole section tight (roughly 150–350 words). Do not alter the
@@ -258,7 +282,8 @@ return:
 - The **by-tag** table, explicitly noting it is **non-additive** (multi-tag
   sessions are counted under each tag, so the column intentionally exceeds the
   grand total — it is not a partition).
-- Outcome distribution and feature-adoption shares.
+- Outcome distribution and feature-adoption shares, and the delegated share
+  of spend (main thread vs subagents vs workflow agents).
 - The **Insights & assessment** from Step 5 — especially the model-choice ROI
   findings with the specific dollar figures and any recommended routing.
 - Paths to `summary.md`, `sessions.jsonl` / `sessions.csv`, and the two tuning

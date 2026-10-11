@@ -6,7 +6,13 @@ Implements Components 1, 3, 4, 5, 6 of the cc-usage-classifier skill:
 one intermediate JSON record per Claude Code session, built entirely from
 local JSONL transcripts. No network, no model calls.
 
-Session id == JSONL filename stem (the join key to any future OTel/admin data).
+Session id == the main transcript's filename stem (the join key to any future
+OTel/admin data). A session is its main thread PLUS every agent transcript it
+spawned — Agent/Task subagents at any depth, forked skills, Workflow-tool agents
+and legacy top-level agent-<id>.jsonl files — found by transcripts.discover()
+(see transcripts.py for the on-disk layout). Agent requests count toward the
+session's per-model tokens and cost; the record also splits them by thread
+source (tokens_by_agent_source), per agent (agents) and per workflow run.
 
 Key correctness facts (confirmed against real transcripts + ccusage):
   - usage lives at entry["message"]["usage"]; the model id at
@@ -17,6 +23,10 @@ Key correctness facts (confirmed against real transcripts + ccusage):
     count its usage exactly once, PER MODEL. Naive summation corrupts
     input/output totals.
   - cache_creation is split into ephemeral_5m / ephemeral_1h when present.
+  - Dedup is session-wide: an agent transcript can replay a parent request id;
+    it is attributed to the thread that wrote it first (main thread first).
+  - Human prompts are transcripts.user_entry_kind() in {human, sdk}: skill
+    bodies, hook feedback, task notifications and agent hand-backs are not.
 
 Usage:
   python3 extract.py [--projects-dir DIR] [--out-dir DIR]
@@ -51,6 +61,9 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import transcripts as tx  # noqa: E402  (vendored, shared with other plugins)
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_OUT_DIR = Path.home() / ".claude" / "cc-usage-classifier" / "out"
@@ -115,7 +128,17 @@ TEST_PASS_RE = re.compile(
     r"OK\b|PASS\b|✓|passing)"
 )
 COMMAND_NAME_RE = re.compile(r"<command-name>\s*/?([^<\s]+)\s*</command-name>")
-SYNTH_PREFIXES = ("<command-", "<local-command-", "Caveat:", "[Request interrupted")
+# user_entry_kind() values that are the person's own prompt
+PROMPT_KINDS = ("human", "sdk")
+# thread sources (transcripts.AgentFile.source, plus the main thread)
+SOURCES = ("main", "agent", "workflow", "team")
+# bounds for the delegation summary in the classifier payload
+MAX_AGENT_DESCRIPTIONS = 15
+MAX_DESC_CHARS = 100
+MAX_PAYLOAD_WORKFLOWS = 10
+MAX_PAYLOAD_TYPES = 10
+# `export const meta = {name: 'race-audit', ...}` in a Workflow tool script
+WORKFLOW_NAME_RE = re.compile(r"""\bname\s*:\s*['"]([^'"\n]{1,80})['"]""")
 
 
 def parse_ts(ts):
@@ -166,30 +189,6 @@ def session_in_range(first_iso, last_iso, since, until):
     if until is not None and lo > until:
         return False
     return True
-
-
-def find_sessions(projects_dir):
-    """Group every *.jsonl under projects_dir by filename stem (== session id).
-
-    Files under a 'subagents/' path are folded into their parent session so
-    Haiku-subagent turns are accounted to the same session.
-    """
-    sessions = defaultdict(lambda: {"main": None, "extra": []})
-    for path in sorted(projects_dir.rglob("*.jsonl")):
-        stem = path.stem
-        if "subagents" in path.parts:
-            sessions[stem]["extra"].append(path)
-        else:
-            # prefer the first top-level file as the main one
-            if sessions[stem]["main"] is None:
-                sessions[stem]["main"] = path
-            else:
-                sessions[stem]["extra"].append(path)
-    # sessions whose only files were under subagents/ still get a main file
-    for stem, grp in sessions.items():
-        if grp["main"] is None and grp["extra"]:
-            grp["main"] = grp["extra"].pop(0)
-    return sessions
 
 
 def iter_entries(paths):
@@ -244,31 +243,25 @@ def text_of_content(content):
     return "\n".join(parts)
 
 
-def is_human_prompt(entry):
+def is_tool_result(entry):
+    """A type=user entry carrying tool output (main thread or sidechain)."""
     if entry.get("type") != "user":
         return False
-    if entry.get("isSidechain"):
-        return False
     if "toolUseResult" in entry:
-        return False
-    msg = entry.get("message")
-    if not isinstance(msg, dict) or msg.get("role") != "user":
-        return False
-    content = msg.get("content")
-    if isinstance(content, str):
-        txt = content.strip()
-    elif isinstance(content, list):
-        # genuine prompt must contain a text block and no tool_result block
-        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
-            return False
-        txt = text_of_content(content).strip()
-    else:
-        return False
-    if not txt:
-        return False
-    if txt.startswith(SYNTH_PREFIXES):
-        return False
-    return True
+        return True
+    content = (entry.get("message") or {}).get("content")
+    return isinstance(content, list) and any(
+        isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+
+
+def is_human_prompt(entry):
+    """Typed (or SDK-sent) prompt from the person, per transcripts.user_entry_kind.
+
+    Excludes skill bodies, hook feedback, compaction summaries (isMeta),
+    task notifications, subagent hand-backs (origin.kind=peer), slash-command
+    wrappers, interrupts, tool results and sidechain entries.
+    """
+    return tx.user_entry_kind(entry) in PROMPT_KINDS
 
 
 def _zero_tokens():
@@ -318,143 +311,278 @@ def _clean(tok):
     return {k: v for k, v in tok.items() if v}
 
 
-def extract_session(session_id, paths, args, thresholds=()):
-    entries = list(iter_entries(paths))
-    if not entries:
-        return None
+class _Thread(object):
+    """Per-transcript accumulator: the main thread or one agent transcript."""
 
-    # --- identity / per-model usage (deduped) ---
+    def __init__(self, path, agent=None):
+        self.path = path
+        self.agent = agent                     # transcripts.AgentFile or None
+        self.is_main = agent is None
+        self.label = "main" if agent is None else agent.agent_id
+        self.source = "main" if agent is None else agent.source
+        self.tokens = defaultdict(_zero_tokens)
+        self.long = defaultdict(lambda: defaultdict(_zero_tokens))
+        self.requests = 0
+        self.tool_counts = Counter()
+        self.bash = []                         # every Bash command (full)
+        self.test_tool_ids = set()             # Bash tool_use ids running tests
+        self.test_runs = 0
+        self.test_results = []                 # output of those test runs
+        self.tool_results = []                 # every tool output (bounded)
+
+    @property
+    def signal_label(self):
+        return "main" if self.is_main else f"{self.source}:{self.label}"
+
+
+def _add_tokens(dst, src):
+    for k, v in src.items():
+        dst[k] += v
+
+
+def _tool_use_ids(content):
+    if not isinstance(content, list):
+        return []
+    return [b.get("tool_use_id") for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_result"]
+
+
+def _test_verdict(texts):
+    """True / False / None from test-run output (any failure dominates)."""
+    if not texts:
+        return None
+    joined = "\n".join(texts)
+    fail = bool(TEST_FAIL_RE.search(joined))
+    passed = bool(TEST_PASS_RE.search(joined))
+    if fail:
+        return False
+    return True if passed else None
+
+
+def _commit_shas(texts):
+    out = []
+    for blob in texts:
+        for m in COMMIT_SHA_RE.finditer(blob):
+            out.append(m.group(1))
+        for m in COMMIT_SHA_LONG_RE.finditer(blob):
+            out.append(m.group(1))
+    return out
+
+
+def _clean_model_map(per_model):
+    return {m: (_clean(t) or {"input": 0}) for m, t in per_model.items()}
+
+
+def _clean_long_map(long_ctx):
+    return {m: {th: _clean(t) for th, t in by_th.items()}
+            for m, by_th in long_ctx.items()}
+
+
+def extract_session(session_id, files, args, thresholds=()):
+    """One record for a session = its main thread plus every agent transcript.
+
+    files: a transcripts.SessionFiles, or (tests / legacy callers) a list of
+    paths whose first item is the main thread.
+    """
+    if isinstance(files, tx.SessionFiles):
+        threads = ([_Thread(files.main)] if files.main is not None else [])
+        threads += [_Thread(a.path, a) for a in files.agents]
+        all_paths = files.all_paths()
+        project_dir = files.project_dir
+        disk_runs = files.workflow_runs()
+    else:
+        paths = list(files)
+        threads = [_Thread(paths[0])] + [
+            _Thread(p, tx.AgentFile(p, Path(p).stem, {}, None)) for p in paths[1:]]
+        all_paths = paths
+        project_dir = paths[0].parent
+        disk_runs = {}
+
+    # --- identity / per-model usage (deduped across the whole session) ---
     per_model = defaultdict(_zero_tokens)
     # model -> str(threshold) -> tokens of requests whose prompt > threshold
     long_ctx = defaultdict(lambda: defaultdict(_zero_tokens))
-    seen_turn = set()          # (requestId | message.id) -> counted once
+    seen_turn = {}             # (requestId | message.id) -> thread label
     seen_tooluse = set()       # tool_use block ids
     models_used = set()
     first_ts = last_ts = None
     human_prompts = []
+    human_prompt_count = 0
     assistant_snippets = []
-    bash_commands = []
-    tool_counts = Counter()
+    bash_commands = []         # main thread, for the payload
+    main_tool_counts = Counter()
     skills = []
-    branch_seq = []            # chronological gitBranch values
+    branch_seq = []            # chronological gitBranch values (main thread)
+    agent_branch_seq = []      # fallback when the main thread is missing
     starting_branch = None
     created_branches = []
-    subagent_count = 0
-    has_sidechain = False
-    agent_teams = False
+    agent_tool_calls = 0       # Agent/Task tool_use blocks, any thread
+    workflow_tool_calls = 0
+    workflow_tool_names = {}   # Workflow tool_use id -> meta.name in script (or None)
+    workflow_run_names = {}    # run id -> name (via the Workflow tool result)
+    team_heuristic = False
     # identifier corpora keyed by source
     corpus = defaultdict(list)  # source -> list[str]
-    # outcome signal scratch
-    bash_all = []
     last_tool_result_error = False
     last_assistant_text = ""
+    main_cwds, all_cwds = Counter(), Counter()
+    n_entries = 0
 
-    for entry in entries:
-        et = entry.get("type")
-        ts = parse_ts(entry.get("timestamp"))
-        if ts:
-            first_ts = ts if first_ts is None else min(first_ts, ts)
-            last_ts = ts if last_ts is None else max(last_ts, ts)
-        if entry.get("isSidechain"):
-            has_sidechain = True
-        gb = entry.get("gitBranch")
-        if gb is not None:
-            if starting_branch is None:
-                starting_branch = gb
-            if not branch_seq or branch_seq[-1] != gb:
-                branch_seq.append(gb)
-        # heuristic agent-team marker
-        if "teamId" in entry or "agentTeamId" in entry or "agentTeam" in entry:
-            agent_teams = True
+    for th in threads:
+        pfx = "" if th.is_main else "agent_"
+        for entry in iter_entries([th.path]):
+            if not isinstance(entry, dict):
+                continue
+            n_entries += 1
+            et = entry.get("type")
+            ts = parse_ts(entry.get("timestamp"))
+            if ts:
+                first_ts = ts if first_ts is None else min(first_ts, ts)
+                last_ts = ts if last_ts is None else max(last_ts, ts)
+            cwd = entry.get("cwd")
+            if cwd:
+                all_cwds[cwd] += 1
+                if th.is_main:
+                    main_cwds[cwd] += 1
+            gb = entry.get("gitBranch")
+            if gb is not None:
+                seq = branch_seq if th.is_main else agent_branch_seq
+                if th.is_main and starting_branch is None:
+                    starting_branch = gb
+                if not seq or seq[-1] != gb:
+                    seq.append(gb)
+            # fallback agent-team marker (meta.json teamName is authoritative)
+            if "teamId" in entry or "agentTeamId" in entry or "agentTeam" in entry:
+                team_heuristic = True
 
-        if et == "assistant":
-            msg = entry.get("message", {})
-            model = msg.get("model")
-            content = msg.get("content", [])
-            # per-model usage, deduped per turn
-            turn_key = entry.get("requestId") or msg.get("id")
-            if model not in SYNTHETIC_MODELS and turn_key and turn_key not in seen_turn:
-                seen_turn.add(turn_key)
-                models_used.add(model)
-                rt = request_tokens(msg.get("usage", {}) or {})
-                pm = per_model[model]
-                for k, v in rt.items():
-                    pm[k] += v
-                ptok = prompt_tokens(rt)
-                for th in thresholds:
-                    if ptok > th:
-                        bucket = long_ctx[model][str(th)]
-                        for k, v in rt.items():
-                            bucket[k] += v
-            # walk content blocks (NOT deduped — distinct calls per turn)
-            for block in content if isinstance(content, list) else []:
-                if not isinstance(block, dict):
-                    continue
-                bt = block.get("type")
-                if bt == "text" and isinstance(block.get("text"), str):
-                    txt = block["text"].strip()
-                    if txt:
-                        last_assistant_text = txt
-                        if len(assistant_snippets) < MAX_ASSISTANT_SNIPPETS:
-                            assistant_snippets.append(txt[:MAX_ASSISTANT_CHARS])
-                        corpus["assistant"].append(txt[:MAX_SCAN_CHARS])
-                elif bt == "tool_use":
-                    bid = block.get("id")
-                    if bid and bid in seen_tooluse:
+            if et == "assistant":
+                msg = entry.get("message") or {}
+                model = msg.get("model")
+                content = msg.get("content", [])
+                turn_key = entry.get("requestId") or msg.get("id")
+                if turn_key:
+                    owner = seen_turn.get(turn_key)
+                    if owner is not None and owner != th.label:
+                        continue  # another thread's request replayed here
+                    if owner is None and model not in SYNTHETIC_MODELS:
+                        seen_turn[turn_key] = th.label
+                        models_used.add(model)
+                        th.requests += 1
+                        rt = request_tokens(msg.get("usage", {}) or {})
+                        _add_tokens(per_model[model], rt)
+                        _add_tokens(th.tokens[model], rt)
+                        ptok = prompt_tokens(rt)
+                        for thr in thresholds:
+                            if ptok > thr:
+                                _add_tokens(long_ctx[model][str(thr)], rt)
+                                _add_tokens(th.long[model][str(thr)], rt)
+                # walk content blocks (NOT deduped — distinct calls per turn)
+                for block in content if isinstance(content, list) else []:
+                    if not isinstance(block, dict):
                         continue
-                    if bid:
-                        seen_tooluse.add(bid)
-                    name = block.get("name", "?")
-                    tool_counts[name] += 1
-                    inp = block.get("input", {}) or {}
-                    if name in ("Task", "Agent"):
-                        subagent_count += 1
-                        st = inp.get("subagent_type") or inp.get("subagentType") or ""
-                        if "team" in str(st).lower():
-                            agent_teams = True
-                    if isinstance(name, str) and "team" in name.lower():
-                        agent_teams = True
-                    if name == "Skill":
-                        sk = inp.get("skill") or inp.get("name")
-                        if sk:
-                            skills.append(str(sk))
-                    if name == "Bash":
-                        cmd = str(inp.get("command", ""))
-                        bash_all.append(cmd)
-                        if len(bash_commands) < MAX_BASH_CMDS:
-                            bash_commands.append(cmd[:MAX_BASH_CHARS])
-                        corpus["bash"].append(cmd[:MAX_SCAN_CHARS])
-                    else:
-                        # scan other tool inputs (bounded) for identifiers
-                        corpus["tool_input"].append(json.dumps(inp)[:MAX_SCAN_CHARS])
+                    bt = block.get("type")
+                    if bt == "text" and isinstance(block.get("text"), str):
+                        txt = block["text"].strip()
+                        if not txt:
+                            continue
+                        if th.is_main:
+                            last_assistant_text = txt
+                            if len(assistant_snippets) < MAX_ASSISTANT_SNIPPETS:
+                                assistant_snippets.append(txt[:MAX_ASSISTANT_CHARS])
+                        corpus[pfx + "assistant"].append(txt[:MAX_SCAN_CHARS])
+                    elif bt == "tool_use":
+                        bid = block.get("id")
+                        if bid and bid in seen_tooluse:
+                            continue
+                        if bid:
+                            seen_tooluse.add(bid)
+                        name = block.get("name", "?")
+                        th.tool_counts[name] += 1
+                        if th.is_main:
+                            main_tool_counts[name] += 1
+                        inp = block.get("input", {}) or {}
+                        if not isinstance(inp, dict):
+                            inp = {}
+                        if name in tx.AGENT_TOOLS:
+                            agent_tool_calls += 1
+                            st = inp.get("subagent_type") or inp.get("subagentType") or ""
+                            if "team" in str(st).lower():
+                                team_heuristic = True
+                        elif name in tx.WORKFLOW_TOOLS:
+                            workflow_tool_calls += 1
+                            m = WORKFLOW_NAME_RE.search(str(inp.get("script", "")))
+                            if bid:
+                                workflow_tool_names[bid] = m.group(1) if m else None
+                        if isinstance(name, str) and "team" in name.lower():
+                            team_heuristic = True
+                        if name == "Skill":
+                            sk = inp.get("skill") or inp.get("name")
+                            if sk:
+                                skills.append(str(sk))
+                        if name == "Bash":
+                            cmd = str(inp.get("command", ""))
+                            th.bash.append(cmd)
+                            if TEST_RUNNER_RE.search(cmd):
+                                th.test_runs += 1
+                                if bid:
+                                    th.test_tool_ids.add(bid)
+                            if th.is_main and len(bash_commands) < MAX_BASH_CMDS:
+                                bash_commands.append(cmd[:MAX_BASH_CHARS])
+                            corpus[pfx + "bash"].append(cmd[:MAX_SCAN_CHARS])
+                        else:
+                            # scan other tool inputs (bounded) for identifiers
+                            corpus[pfx + "tool_input"].append(
+                                json.dumps(inp)[:MAX_SCAN_CHARS])
 
-        elif et == "user":
-            msg = entry.get("message", {})
-            content = msg.get("content")
-            if is_human_prompt(entry):
+            elif et == "user":
+                msg = entry.get("message") or {}
+                content = msg.get("content")
+                if is_tool_result(entry):
+                    # tool output — scan for identifiers / repo / tests / errors
+                    tr_text = text_of_content(content) if content is not None else ""
+                    tur = entry.get("toolUseResult")
+                    if tur is not None:
+                        tr_text += "\n" + (tur if isinstance(tur, str)
+                                           else json.dumps(tur))
+                    tr_text = tr_text[:MAX_SCAN_CHARS]
+                    corpus[pfx + "tool_result"].append(tr_text)
+                    th.tool_results.append(tr_text)
+                    ids = _tool_use_ids(content)
+                    if any(i in th.test_tool_ids for i in ids):
+                        th.test_results.append(tr_text)
+                    for i in ids:
+                        if i in workflow_tool_names:  # Workflow launch output
+                            for rid in tx.workflow_run_ids_in(tr_text):
+                                if not workflow_run_names.get(rid):
+                                    workflow_run_names[rid] = workflow_tool_names[i]
+                    if th.is_main:
+                        err = isinstance(content, list) and any(
+                            isinstance(b, dict) and b.get("type") == "tool_result"
+                            and b.get("is_error") for b in content)
+                        if isinstance(tur, dict) and tur.get("is_error"):
+                            err = True
+                        last_tool_result_error = err
+                    continue
+                if not th.is_main:
+                    continue  # the prompt handed to the agent, not the person's
+                kind = tx.user_entry_kind(entry)
                 txt = (content if isinstance(content, str)
                        else text_of_content(content)).strip()
-                if len(human_prompts) < MAX_PROMPTS:
-                    human_prompts.append(txt[:MAX_PROMPT_CHARS])
-                corpus["human"].append(txt[:MAX_SCAN_CHARS])
-                for m in COMMAND_NAME_RE.findall(txt):
-                    skills.append(m)
-            else:
-                # tool result — scan for identifiers / repo / tests / errors
-                tr_text = text_of_content(content) if content is not None else ""
-                tur = entry.get("toolUseResult")
-                if tur is not None:
-                    tr_text += "\n" + (tur if isinstance(tur, str)
-                                       else json.dumps(tur))
-                tr_text = tr_text[:MAX_SCAN_CHARS]
-                corpus["tool_result"].append(tr_text)
-                # is_error on the tool_result block?
-                if isinstance(content, list):
-                    err = any(isinstance(b, dict) and b.get("type") == "tool_result"
-                              and b.get("is_error") for b in content)
-                    last_tool_result_error = err
-                if isinstance(tur, dict) and tur.get("is_error"):
-                    last_tool_result_error = True
+                if kind in PROMPT_KINDS:
+                    human_prompt_count += 1
+                    if len(human_prompts) < MAX_PROMPTS:
+                        human_prompts.append(txt[:MAX_PROMPT_CHARS])
+                    corpus["human"].append(txt[:MAX_SCAN_CHARS])
+                elif kind == "command":
+                    for m in COMMAND_NAME_RE.findall(txt):
+                        skills.append(m)
+                elif kind in ("task_notification", "peer"):
+                    # hand-backs can name PRs/commits the agents produced;
+                    # scanned for identifiers only, never sent as prompts
+                    corpus["agent_message"].append(txt[:MAX_SCAN_CHARS])
+
+    if not n_entries:
+        return None
 
     if first_ts and last_ts:
         duration_s = max(0, int((last_ts - first_ts).total_seconds()))
@@ -462,20 +590,24 @@ def extract_session(session_id, paths, args, thresholds=()):
         duration_s = None
 
     # --- project path: authoritative cwd field, else decode dir name ---
-    cwds = Counter(e.get("cwd") for e in entries if e.get("cwd"))
+    cwds = main_cwds or all_cwds
     if cwds:
         project_path = cwds.most_common(1)[0][0]
     else:
         # decode "-home-user-foo" -> "/home/user/foo" (best effort)
-        project_path = "/" + paths[0].parent.name.lstrip("-").replace("-", "/")
+        project_path = "/" + Path(project_dir).name.lstrip("-").replace("-", "/")
 
     # --- Component 4: repo + branch ---
     repo_name, repo_source = resolve_repo(corpus, project_path)
-    for cmd in bash_all:
-        for m in BRANCH_CREATE_RE.finditer(cmd):
-            br = m.group(1).strip().strip("'\"")
-            if br and br not in ("-d", "-D", "--list") and br not in created_branches:
-                created_branches.append(br)
+    for th in threads:
+        for cmd in th.bash:
+            for m in BRANCH_CREATE_RE.finditer(cmd):
+                br = m.group(1).strip().strip("'\"")
+                if br and br not in ("-d", "-D", "--list") and br not in created_branches:
+                    created_branches.append(br)
+    if not branch_seq:
+        branch_seq = agent_branch_seq
+        starting_branch = branch_seq[0] if branch_seq else None
     branch_created = bool(created_branches)
     if branch_created:
         working_branch = created_branches[-1]
@@ -488,50 +620,160 @@ def extract_session(session_id, paths, args, thresholds=()):
     identifiers = extract_identifiers(corpus, args.jira_projects)
 
     # --- Component 6: outcome signals ---
+    # Commits / tests / PRs made by agents count (the work was delegated);
+    # signal_sources records which thread produced each. Final-state signals
+    # (last tool error, ending on a question) are main-thread only.
     commit_shas = []
-    for src in ("tool_result", "bash"):
-        for blob in corpus[src]:
-            for m in COMMIT_SHA_RE.finditer(blob):
-                commit_shas.append(m.group(1))
-            for m in COMMIT_SHA_LONG_RE.finditer(blob):
-                commit_shas.append(m.group(1))
+    sources = {"commit_created": [], "pr_created": [], "tests_run": []}
+    test_runs = {"main": 0, "delegated": 0}
+    verdict_main, verdicts_delegated = None, []
+    for th in threads:
+        shas = _commit_shas(th.tool_results + th.bash)
+        commit_shas.extend(shas)
+        if shas or any(re.search(r"\bgit\s+commit\b", c) for c in th.bash):
+            sources["commit_created"].append(th.signal_label)
+        if any(GH_PR_CREATE_RE.search(c) for c in th.bash):
+            sources["pr_created"].append(th.signal_label)
+        if th.test_runs:
+            sources["tests_run"].append(th.signal_label)
+            test_runs["main" if th.is_main else "delegated"] += th.test_runs
+            # output of the test commands themselves; whole-thread output
+            # only when tool_use ids are missing (old transcripts)
+            v = _test_verdict(th.test_results or th.tool_results)
+            if th.is_main:
+                verdict_main = v
+            else:
+                verdicts_delegated.append(v)
     commit_shas = list(dict.fromkeys(commit_shas))
-    git_commit_invoked = any(re.search(r"\bgit\s+commit\b", c) for c in bash_all)
-    commit_created = bool(commit_shas) or git_commit_invoked
-    pr_created = any(GH_PR_CREATE_RE.search(c) for c in bash_all) or any(
+    commit_created = bool(sources["commit_created"])
+    pr_created = bool(sources["pr_created"]) or any(
         i["type"] == "github_pr" and i["confidence"] == "high" for i in identifiers
     )
-    tests_run = any(TEST_RUNNER_RE.search(c) for c in bash_all)
-    tests_passed = None
-    if tests_run:
-        joined = "\n".join(corpus["tool_result"])
-        fail = bool(TEST_FAIL_RE.search(joined))
-        passed = bool(TEST_PASS_RE.search(joined))
-        if fail and not passed:
-            tests_passed = False
-        elif passed and not fail:
-            tests_passed = True
-        elif passed and fail:
-            tests_passed = False  # any failure dominates
+    tests_run = bool(sources["tests_run"])
+    if False in verdicts_delegated:
+        verdict_delegated = False
+    elif True in verdicts_delegated:
+        verdict_delegated = True
+    else:
+        verdict_delegated = None
+    # the main thread's last word is the final state; delegated runs decide
+    # only when the main thread ran no tests (agents often run failing repros)
+    tests_passed = verdict_main if test_runs["main"] else verdict_delegated
     ended_on_question = last_assistant_text.rstrip().endswith("?")
 
-    assistant_turns = len(seen_turn)
+    main_requests = sum(th.requests for th in threads if th.is_main)
+    delegated_requests = sum(th.requests for th in threads if not th.is_main)
 
-    # round/clean per_model: drop all-zero models, drop empty cache buckets
-    pm_out = {}
-    for model, tok in per_model.items():
-        pm_out[model] = _clean(tok) or {"input": 0}
-    lc_out = {m: {th: _clean(t) for th, t in by_th.items()}
-              for m, by_th in long_ctx.items()}
+    # --- delegation: per-source tokens, per-agent rows, workflow runs ---
+    by_source = {s: defaultdict(_zero_tokens) for s in SOURCES}
+    long_by_source = {s: defaultdict(lambda: defaultdict(_zero_tokens)) for s in SOURCES}
+    agents = []
+    delegated_tool_counts = Counter()
+    for th in threads:
+        src = th.source if th.source in by_source else "agent"
+        for model, tok in th.tokens.items():
+            _add_tokens(by_source[src][model], tok)
+        for model, by_th in th.long.items():
+            for thr, tok in by_th.items():
+                _add_tokens(long_by_source[src][model][thr], tok)
+        if th.is_main:
+            continue
+        delegated_tool_counts.update(th.tool_counts)
+        s = th.agent.summary()
+        row = {
+            "agent_id": s["agent_id"],
+            "agent_type": s["agent_type"],
+            "source": s["source"],
+            "workflow_run_id": s["workflow_run_id"],
+            "workflow_phase": s["workflow_phase"],
+            "spawn_depth": s["spawn_depth"],
+            "parent_agent_id": s["parent_agent_id"],
+            "background": s["background"],
+            "team_name": s["team_name"],
+            "stopped_by_user": s["stopped_by_user"],
+            "models": sorted(th.tokens),
+            "requests": th.requests,
+            "tool_calls": sum(th.tool_counts.values()),
+            "test_runs": th.test_runs,
+            "tokens_by_model": _clean_model_map(th.tokens),
+            "long_context_tokens_by_model": _clean_long_map(th.long),
+        }
+        if not args.redact_prompts:
+            row["description"] = s["description"]
+        agents.append(row)
+
+    runs = {}
+    for rid, r in disk_runs.items():
+        runs[rid] = {"run_id": rid, "name": r.get("name"), "agents": r.get("agents", 0),
+                     "phases": list(r.get("phases", [])),
+                     "agent_types": dict(r.get("agent_types", {}))}
+    for rid, name in workflow_run_names.items():
+        r = runs.setdefault(rid, {"run_id": rid, "name": None, "agents": 0,
+                                  "phases": [], "agent_types": {}})
+        if not r["name"] and name:
+            r["name"] = name
+    for r in runs.values():
+        members = [a for a in agents if a["workflow_run_id"] == r["run_id"]]
+        tok = defaultdict(_zero_tokens)
+        lng = defaultdict(lambda: defaultdict(_zero_tokens))
+        for a in members:
+            for model, t in a["tokens_by_model"].items():
+                _add_tokens(tok[model], t)
+            for model, by_th in a["long_context_tokens_by_model"].items():
+                for thr, t in by_th.items():
+                    _add_tokens(lng[model][thr], t)
+        r["models"] = sorted(tok)
+        r["requests"] = sum(a["requests"] for a in members)
+        r["tool_calls"] = sum(a["tool_calls"] for a in members)
+        r["stopped_by_user"] = sum(1 for a in members if a["stopped_by_user"])
+        r["tokens_by_model"] = _clean_model_map(tok)
+        r["long_context_tokens_by_model"] = _clean_long_map(lng)
+    workflow_runs = sorted(runs.values(), key=lambda r: r["run_id"])
+
+    agents_by_source = Counter(a["source"] for a in agents)
+    agents_by_type = Counter(a["agent_type"] for a in agents)
+    team_names = sorted({a["team_name"] for a in agents if a["team_name"]})
+    if team_names:
+        teams_detection = "meta"
+    elif team_heuristic:
+        teams_detection = "heuristic"
+    else:
+        teams_detection = None
+    max_depth = max([a["spawn_depth"] for a in agents] or [0])
+
+    pm_out = _clean_model_map(per_model)
+    lc_out = _clean_long_map(long_ctx)
 
     payload = {
         "human_prompts": human_prompts if not args.redact_prompts else [],
         "prompts_redacted": bool(args.redact_prompts),
-        "human_prompt_count": len(corpus["human"]),
+        "human_prompt_count": human_prompt_count,
         "assistant_snippets": assistant_snippets if not args.redact_prompts else [],
-        "tool_counts": dict(tool_counts),
+        "tool_counts": dict(main_tool_counts),
         "bash_commands": bash_commands if not args.redact_prompts else [],
     }
+    if agents or agent_tool_calls or workflow_tool_calls:
+        delegation = {
+            "agents": len(agents),
+            "by_source": dict(agents_by_source),
+            "by_type": dict(agents_by_type.most_common(MAX_PAYLOAD_TYPES)),
+            "workflows": [{"name": r["name"] or r["run_id"], "phases": r["phases"],
+                           "agents": r["agents"]}
+                          for r in workflow_runs[:MAX_PAYLOAD_WORKFLOWS]],
+            "delegated_requests": delegated_requests,
+            "delegated_tool_calls": sum(delegated_tool_counts.values()),
+            "delegated_tool_counts": dict(delegated_tool_counts.most_common(10)),
+            "max_spawn_depth": max_depth,
+            "stopped_by_user": sum(1 for a in agents if a["stopped_by_user"]),
+        }
+        if not args.redact_prompts:
+            descs = []
+            for a in agents:
+                d = (a.get("description") or "").strip()
+                if d and d[:MAX_DESC_CHARS] not in descs:
+                    descs.append(d[:MAX_DESC_CHARS])
+            delegation["agent_descriptions"] = descs[:MAX_AGENT_DESCRIPTIONS]
+        payload["delegation"] = delegation
 
     record = {
         "session_id": session_id,
@@ -540,14 +782,24 @@ def extract_session(session_id, paths, args, thresholds=()):
         "first_timestamp": first_ts.isoformat() if first_ts else None,
         "last_timestamp": last_ts.isoformat() if last_ts else None,
         "duration_seconds": duration_s,
-        "human_prompt_count": len(corpus["human"]),
-        "assistant_turn_count": assistant_turns,
-        "file_hash": file_hash(paths),
+        "human_prompt_count": human_prompt_count,
+        "assistant_turn_count": main_requests,
+        "request_count": len(seen_turn),
+        "delegated_request_count": delegated_requests,
+        "transcript_files": len(all_paths),
+        "file_hash": file_hash(all_paths),
+        # every model's tokens across the main thread AND all agents
         "tokens_by_model": pm_out,
         # subset of tokens_by_model: requests whose prompt exceeded a
         # pricing.json long_context threshold (cost.py prices these)
         "long_context_thresholds": list(thresholds),
         "long_context_tokens_by_model": lc_out,
+        # partition of tokens_by_model by the thread that made the request
+        "tokens_by_agent_source": {s: _clean_model_map(v) for s, v in by_source.items()},
+        "long_context_tokens_by_agent_source": {
+            s: _clean_long_map(v) for s, v in long_by_source.items()},
+        "agents": agents,
+        "workflow_runs": workflow_runs,
         "repo": {"name": repo_name, "source": repo_source},
         "branch": {
             "starting_branch": starting_branch,
@@ -557,10 +809,21 @@ def extract_session(session_id, paths, args, thresholds=()):
             "branch_sequence": branch_seq,
         },
         "features": {
-            "subagents_used": subagent_count > 0 or has_sidechain,
-            "subagent_count": subagent_count,
-            "agent_teams_used": agent_teams,
-            "agent_teams_detection": "heuristic",
+            "subagents_used": bool(agents) or agent_tool_calls > 0,
+            "subagent_count": len(agents),
+            "agent_tool_calls": agent_tool_calls,
+            "agents_by_source": dict(agents_by_source),
+            "background_agents": sum(1 for a in agents if a["background"]),
+            "agents_stopped_by_user": sum(1 for a in agents if a["stopped_by_user"]),
+            "nested_agents": any(a["spawn_depth"] > 1 or a["parent_agent_id"]
+                                 for a in agents),
+            "max_spawn_depth": max_depth,
+            "workflows_used": bool(workflow_runs) or workflow_tool_calls > 0,
+            "workflow_runs": len(workflow_runs),
+            "workflow_tool_calls": workflow_tool_calls,
+            "agent_teams_used": teams_detection is not None,
+            "agent_teams": team_names,
+            "agent_teams_detection": teams_detection,
             "skills_used": bool(skills),
             "skills": sorted(set(skills)),
         },
@@ -571,9 +834,13 @@ def extract_session(session_id, paths, args, thresholds=()):
             "pr_created": pr_created,
             "tests_run": tests_run,
             "tests_passed": tests_passed,
+            "tests_passed_main": verdict_main,
+            "tests_passed_delegated": verdict_delegated,
+            "test_runs": test_runs,
+            "signal_sources": sources,
             "last_turn_was_error": last_tool_result_error,
             "ended_on_unanswered_question": ended_on_question,
-            "turn_count": assistant_turns,
+            "turn_count": main_requests,
             "duration_seconds": duration_s,
         },
         "classifier_payload": payload,
@@ -582,7 +849,7 @@ def extract_session(session_id, paths, args, thresholds=()):
 
 
 def resolve_repo(corpus, project_path):
-    for src in ("tool_result", "bash"):
+    for src in ("tool_result", "bash", "agent_tool_result", "agent_bash"):
         for blob in corpus[src]:
             m = REMOTE_URL_RE.search(blob)
             if m:
@@ -820,14 +1087,18 @@ def main(argv=None):
             log(f"Warning: unreadable cache {cache_path}: {exc} — ignoring")
             cache = {}
 
-    sessions = find_sessions(projects_dir)
+    # one session = main thread + every subagent / workflow agent transcript
+    # (never group by filename stem: agent-<id>.jsonl is not a session)
+    sessions = tx.discover(projects_dir)
     extracted_path = out_dir / "extracted.jsonl"
     todo, cached = [], []
     records = []
     skipped_out_of_range = 0
-    for session_id, grp in sorted(sessions.items()):
-        paths = [grp["main"]] + grp["extra"]
-        rec = extract_session(session_id, paths, args, thresholds)
+    for session_id, files in sorted(sessions.items()):
+        if files.main is None:
+            log(f"Note: session {session_id} has agent transcripts but no main "
+                f"transcript ({len(files.agents)} agent files) — extracted from agents only")
+        rec = extract_session(session_id, files, args, thresholds)
         if rec is None:
             continue
         if not session_in_range(rec["first_timestamp"], rec["last_timestamp"],
