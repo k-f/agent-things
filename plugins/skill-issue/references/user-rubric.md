@@ -36,13 +36,34 @@ If `stats.messages_truncated` is more than ~10% of returned messages, re-run wit
 
 The JSON has four parts:
 - `stats` — counts, matched project dirs, retention
-- `summary` — aggregate structural metrics across sessions (primary evidence for D4, D5, D7)
+- `summary` — aggregate structural metrics across sessions (primary evidence for D4, D5, D7),
+  including the delegation aggregates listed below
 - `sessions` — per-session metrics (`cwd`, `user_messages`, `tool_uses_per_user_message`,
   `max_tool_uses_between_user_messages`, `subagent_types`, `skills_invoked`, `slash_commands`,
-  `test_runs`, `interrupts`, `duration_seconds`, `active_seconds`, `compactions`)
-- `messages` — genuine user-typed text only (tool results, injected skill bodies, hook output,
-  system reminders, compaction summaries and local-command output are already removed;
-  slash-command arguments are kept and tagged with `slash_command`)
+  `test_runs`, `interrupts`, `duration_seconds`, `active_seconds`, `compactions`,
+  `task_notifications`, `peer_messages`, and a `delegation` block — see below)
+- `messages` — genuine prompts only (tool results, injected skill bodies, hook output,
+  system reminders, compaction summaries, task notifications, subagent hand-backs and
+  local-command output are already removed; slash-command arguments are kept and tagged with
+  `slash_command`). Each has a `source`: `human`, `command`, or `sdk` (sent programmatically,
+  e.g. `claude -p` or the Agent SDK — judge prompting skill on `human`/`command` messages; an
+  sdk prompt may have been written by a script or another agent)
+
+**Delegation metrics come from the subagent and workflow transcripts**, not just the main
+thread. The main thread's `subagent_spawns` counts only Agent/Task calls the main agent made;
+`delegation` also sees agents those agents spawned, forked skills, and Workflow-run agents.
+
+| Per session `delegation.*` | Summary counterpart | Meaning |
+|---|---|---|
+| `agents_total`, `by_source` {agent, workflow, team}, `by_type` | `delegated_agents`, `delegated_agents_by_source`, `delegated_agent_types`, `sessions_with_delegated_agents` | Agent transcripts the session produced, how they were started, and their types |
+| `max_spawn_depth`, `nested_agents` | `max_spawn_depth`, `nested_agents`, `sessions_with_nested_agents` | Agents spawned by agents (depth ≥ 2) |
+| `background_agents` | `background_agents` | Agents run in the background while the session continued |
+| `stopped_by_user` | `agents_stopped_by_user` | Agents the person killed |
+| `skill_forks` | `skill_forks` | Forked skills (`context: fork`) run as agents |
+| `delegated_tool_calls` | `delegated_tool_calls`, `delegated_tool_calls_share` | Tool calls made inside agents (share = of all tool calls) |
+| `delegated_test_runs` | `delegated_test_runs`, `sessions_with_any_test_runs` | Test-runner commands run inside agents |
+| `workflow_runs` [{run_id, name, agents, phases, agent_types, launched_by_tool_use, has_verify_phase}], `workflow_launches` | `workflow_runs`, `workflow_agents`, `workflow_runs_with_verify_phase`, `workflow_launches`, `sessions_with_workflows` | Dynamic workflows (Workflow tool) and their phases |
+| (session level) `task_notifications`, `peer_messages` | same | Background-task completions and subagent hand-backs the session received and handled |
 
 **Retention** — never edit `~/.claude/settings.json`. If `recommend_change` is true, report:
 
@@ -129,22 +150,46 @@ Can Claude know it is done without asking?
 **Primary evidence (metrics):** `summary.tool_uses_per_user_message`,
 `median_session_tool_uses_per_user_message`, `max_tool_uses_between_user_messages`,
 `sessions_with_20plus_tool_run`, `subagent_spawns`, `sessions_with_subagents`,
-`subagent_types`, `sessions_with_test_runs`, `median_active_seconds`.
+`subagent_types`, `sessions_with_test_runs`, `median_active_seconds`, and the delegation
+aggregates: `delegated_agents`, `delegated_tool_calls` (+ `_share`), `nested_agents`,
+`background_agents` with `task_notifications`/`peer_messages`, `workflow_runs`,
+`workflow_runs_with_verify_phase`, `delegated_test_runs`, `agents_stopped_by_user`.
 **Secondary:** quotes showing the size of work delegated ("build the whole importer", vs
 "rename this variable").
 
+`tool_uses_per_user_message` counts main-thread tool calls only. When much of the work ran
+in agents (`delegated_tool_calls_share` ≥ ~0.3), judge the size of each delegated unit of
+work as main + delegated tool calls per user message, and say so in the evidence.
+
+**Self-validation** counts wherever it ran: main-thread `test_runs`, `delegated_test_runs`
+(tests run inside agents), and workflow phases named like verify/review/test/check
+(`has_verify_phase`). Strong evidence of delegated autonomous work: many delegated tool
+calls per prompt, nested agents, workflow runs with a verify phase, background agents whose
+`task_notifications` / `peer_messages` the session handled without the person re-prompting.
+
 | Score | Metric anchors (typical; use judgement at the edges) |
 |---|---|
-| 5 | Median ≥ 15 tool uses per user message **and** repeated 20+-tool runs **and** delegation with self-validation: subagents and/or test runs inside long runs, or CI-driven Claude runs. Large multi-file work delivered with few corrections. |
-| 4 | Median 8–15; some 20+-tool runs; subagents or in-session test runs present |
+| 5 | Median ≥ 15 tool uses per user message (counting delegated calls, see above) **and** repeated 20+-tool runs **and** delegation with self-validation: subagents/workflows whose work is verified (delegated test runs, verify phases, tests after agents return) and/or test runs inside long runs, or CI-driven Claude runs. Large multi-file work delivered with few corrections. |
+| 4 | Median 8–15; some 20+-tool runs; subagents, workflows or in-session test runs present |
 | 3 | Median 4–8; moderate single-agent runs; little delegation |
 | 2 | Median 2–4; mostly short exchanges |
 | 1 | Median < 2; one instruction, one action |
 
-No single feature is required for any score. Agent teams are an experimental, off-by-default
-feature: their use is supporting evidence, their absence is never a gap. Subagent use is
-evidence of delegation, not a requirement — a user whose long single-agent runs end in green
-test runs is delegating well. High interrupt rates during long runs lower this score (see D5).
+No single feature is required for any score. Agent teams and dynamic workflows are
+supporting evidence when used; their absence is never a gap. Subagent use is evidence of
+delegation, not a requirement — a user whose long single-agent runs end in green test runs
+is delegating well. Reward **demonstrated delegation with verification**, not volume.
+High interrupt rates during long runs lower this score (see D5).
+
+**Over-delegation is a quality concern, not a strength.** Flag it (and cap D4 at 3 unless
+other evidence is strong) when the evidence shows fan-out without checking, e.g.:
+- many agents or workflow agents (say ≥ 10 in a session) with no `delegated_test_runs`, no
+  main-thread `test_runs` after them, and no workflow run with `has_verify_phase`;
+- `agents_stopped_by_user` high relative to `delegated_agents` (≥ ~20%): the person keeps
+  killing agents that went the wrong way — look at the prompts that launched them;
+- deep nesting (`max_spawn_depth` ≥ 3) or large workflows on small tasks, judged against the
+  quoted prompt.
+Quote the numbers in the evidence column either way.
 
 ### D5. Feedback Quality & Iteration
 
@@ -188,10 +233,16 @@ encodes the quality bar counts in the user's favour — they set it once.
 ### D7. Claude Code Feature Utilisation
 
 **Primary evidence (metrics):** `skills_invoked`, `slash_commands`,
-`sessions_using_skills_or_commands`, `subagent_types` (custom/plugin agent types beyond the
-built-in `general-purpose`, `Explore`, `Plan` show investment), `compactions` (manual `/compact`
-appears in `slash_commands`), plus the persistent context from Step 2 (CLAUDE.md, project
-skills, agents, hooks). **Secondary:** messages that mention features.
+`sessions_using_skills_or_commands`, `subagent_types` and `delegated_agent_types`
+(custom/plugin agent types beyond the built-in `general-purpose`, `Explore`, `Plan`,
+`claude-code-guide`, `workflow-subagent` show investment; `delegated_agent_types` also sees
+agents spawned by agents and forked skills), `skill_forks`, `workflow_runs` /
+`sessions_with_workflows` (dynamic workflows, with their names), `compactions` (manual
+`/compact` appears in `slash_commands`), plus the persistent context from Step 2 (CLAUDE.md,
+project skills, agents, hooks). **Secondary:** messages that mention features.
+
+Workflows and custom agent types count as leverage like skills do, but none of them is
+required for a 5.
 
 Do not score from whether messages mention the words "skill" or "agent". Score what was used.
 Separate built-in housekeeping commands (`clear`, `compact`, `model`, `config`, `help`, `resume`,
@@ -199,7 +250,7 @@ Separate built-in housekeeping commands (`clear`, `compact`, `model`, `config`, 
 skills and commands, `init`, `memory`, `review`, `agents`, `hooks`, `mcp`). Housekeeping shows
 basic fluency; workflow commands and skills show leverage.
 
-- **5** Skills/commands used in most sessions; custom or plugin agents used; CLAUDE.md maintained; hooks or CI integration present where they make sense
+- **5** Skills/commands used in most sessions; custom or plugin agents (or workflows) used; CLAUDE.md maintained; hooks or CI integration present where they make sense
 - **4** Regular skill/command use; CLAUDE.md maintained; some custom agents or hooks
 - **3** CLAUDE.md exists; occasional skills or workflow commands
 - **2** Housekeeping commands only; no skills; thin or no CLAUDE.md
@@ -218,7 +269,7 @@ awarded if its requirement is met; otherwise drop one level.
 
 | Profile | Score | Gate (required evidence) |
 |---|---|---|
-| **Orchestrator** | ≥ 4.5 | Large delegated or autonomous work with self-validation: D4 ≥ 4 with repeated 20+-tool runs **and** at least one of — subagent delegation, in-session test runs closing out the work, CI-driven Claude runs. Not tied to any specific feature. |
+| **Orchestrator** | ≥ 4.5 | Large delegated or autonomous work with self-validation: D4 ≥ 4 with repeated 20+-tool runs (main-thread or delegated) **and** at least one of — subagent/workflow delegation that includes verification (`delegated_test_runs`, a verify-phase workflow run, or tests run after the agents return), in-session test runs closing out the work, CI-driven Claude runs. Not tied to any specific feature. Not awarded when over-delegation is flagged. |
 | **Navigator** | 3.5–4.4 | D3 ≥ 4 and D4 ≥ 3: clear goals with criteria, sessions run autonomously |
 | **Collaborator** | 2.5–3.4 | Mostly goal-oriented; uses basic features; inconsistent feedback |
 | **Apprentice** | 1.5–2.4 | Task-by-task; thin context; little feature use |
@@ -246,9 +297,14 @@ Use this template. Keep quotes short. Every strength and growth area cites a met
 | Tool uses per user message (overall / median session) | x / x |
 | Longest autonomous run (tool uses) | x |
 | Sessions with 20+-tool runs | x of N |
-| Subagent spawns (types) | x (type: n, ...) |
+| Subagent spawns from main thread (types) | x (type: n, ...) |
+| Delegated agents (by source; nested; background; stopped by user) | x (agent n, workflow n, team n; nested n; bg n; stopped n) |
+| Tool calls inside agents (share of all) | x (x%) |
+| Workflow runs (agents; with verify phase) | x (n; n) — names |
+| Tests run (main thread / inside agents) | x / x |
+| Task notifications + hand-backs handled | x + x |
 | Skills / workflow commands used | name (n), ... |
-| In-session test runs | x sessions |
+| Sessions with any test runs | x of N |
 | Interrupts per 100 messages | x |
 | Median session length (active) | x min |
 

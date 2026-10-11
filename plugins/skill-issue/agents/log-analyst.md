@@ -30,6 +30,12 @@ the missing input. Do not search the filesystem for other copies.
 - Never write to `~/.claude/settings.json` or any other file. Retention is a recommendation.
 - Never quote secrets, tokens or credentials that appear in messages; describe them instead.
 - Do not ask questions. You cannot receive answers. State assumptions in the output.
+- Cite numbers. Every D4 and D7 score names the metrics it rests on, including the delegation
+  metrics (`delegated_agents`, `delegated_tool_calls`, `nested_agents`, `workflow_runs` and
+  their phases, `delegated_test_runs`, `background_agents` with `task_notifications`,
+  `agents_stopped_by_user`). Main-thread `subagent_spawns` alone undercounts delegation.
+- Score only `source: human` / `command` messages for prompting dimensions (D1–D3, D5, D8);
+  mention `sdk` messages separately if any.
 
 ## Output contract
 
@@ -53,6 +59,15 @@ Return exactly two things, in this order:
     "tool_uses_per_user_message": 0.0,
     "max_tool_uses_between_user_messages": 0,
     "subagent_spawns": 0,
+    "delegated_agents": 0,
+    "delegated_agents_by_source": {"agent": 0, "workflow": 0, "team": 0},
+    "delegated_tool_calls": 0,
+    "nested_agents": 0,
+    "background_agents": 0,
+    "agents_stopped_by_user": 0,
+    "workflow_runs": 0,
+    "workflow_runs_with_verify_phase": 0,
+    "delegated_test_runs": 0,
     "sessions_with_test_runs": 0,
     "interrupts_per_100_user_messages": 0.0,
     "skills_and_workflow_commands": ["name"]

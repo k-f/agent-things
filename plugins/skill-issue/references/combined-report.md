@@ -12,7 +12,8 @@ the single fix that breaks it. Check at least these patterns against the evidenc
 |---|---|---|---|
 | Low D2 with project background re-pasted each session | CLAUDE.md missing or thin | Context re-provided every session; less time for autonomous work | CLAUDE.md |
 | Low D7: no skills/workflow commands in `summary` | No `.claude/skills` for recurring workflows | User can't use what doesn't exist | Skills for the 2–3 most repeated requests (mine the messages for them) |
-| High D4 (long runs) but few `sessions_with_test_runs` | Test command missing/undocumented | Claude works unattended but can't verify; user catches bugs late | Documented, runnable test command in CLAUDE.md |
+| High D4 (long runs) but few `sessions_with_any_test_runs` | Test command missing/undocumented | Claude works unattended but can't verify; user catches bugs late | Documented, runnable test command in CLAUDE.md |
+| Over-delegation: many `delegated_agents` / `workflow_agents`, no `delegated_test_runs` or verify-phase workflow runs, or high `agents_stopped_by_user` | No test command agents can run; no custom agents/skills encoding how to verify | Agents fan out and return unverified work; the user reviews or kills it by hand | Runnable test command in CLAUDE.md, then a verify step (agent or workflow phase) that runs it |
 | High interrupt rate (D5) | No conventions/protected areas in CLAUDE.md | Claude guesses, user interrupts to redirect | Write the conventions the interrupts keep enforcing |
 | Low D3 (step-by-step) | Delegation Readiness ≥ 4 | Project is ready for delegation; user isn't using it | Behaviour change: goal + success criteria prompts |
 | High D3/D4 | Delegation Readiness ≤ 2 | User delegates into a project that can't verify work | Tests + lint commands, then CI on PRs |
