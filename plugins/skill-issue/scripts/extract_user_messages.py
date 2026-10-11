@@ -332,6 +332,11 @@ def classify_user_entry(entry: dict, local_command_parents=frozenset()) -> dict:
     if kind == "interrupt":
         return {"kind": "interrupt"}
     if kind == "command":
+        if not text.startswith("<command-"):
+            # bare "/cmd args" with no origin metadata (headless/local run)
+            m = LOCAL_COMMAND_RE.match(text)
+            if m:
+                return {"kind": "local_command", "command": m.group(1), "text": m.group(2).strip()}
         return _parse_command(text)
     if kind == "meta" or text.startswith(EXTRA_SYNTH_PREFIXES):
         return {"kind": "synthetic"}

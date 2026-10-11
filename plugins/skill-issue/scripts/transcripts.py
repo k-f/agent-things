@@ -32,6 +32,7 @@ Python 3.8+, stdlib only.
 
 import json
 import re
+import sys
 from pathlib import Path
 
 AGENT_FILE_RE = re.compile(r"^agent-(.+)\.jsonl$")
@@ -49,6 +50,10 @@ SYNTHETIC_PREFIXES = (
     "Base directory for this skill:", "This session is being continued from",
 )
 INTERRUPT_PREFIX = "[Request interrupted"
+REMINDER_BLOCK_RE = re.compile(r"<system-reminder>.*?</system-reminder>\s*", re.S)
+# A local slash command run in a headless/older session that left no
+# origin metadata: "/plugin:skill args"
+BARE_COMMAND_RE = re.compile(r"^/[A-Za-z0-9][\w:.-]*(\s|$)")
 
 
 # ---------------------------------------------------------------- reading
@@ -95,20 +100,27 @@ def _first_session_id(path):
 class AgentFile(object):
     """One subagent transcript and what its .meta.json says about it."""
 
-    __slots__ = ("path", "agent_id", "meta", "workflow_run_id")
+    __slots__ = ("path", "agent_id", "meta", "workflow_run_id", "depth")
 
     def __init__(self, path, agent_id, meta, workflow_run_id):
         self.path = path
         self.agent_id = agent_id
         self.meta = meta
         self.workflow_run_id = workflow_run_id
+        self.depth = None  # set by _resolve_depths()
 
     @property
     def agent_type(self):
-        return self.meta.get("agentType") or ("workflow" if self.workflow_run_id else "unknown")
+        return self.meta.get("agentType") or (
+            "workflow-subagent" if self.workflow_run_id else "unknown")
 
     @property
     def spawn_depth(self):
+        """Nesting depth: the larger of meta spawnDepth and the parentAgentId
+        chain. Agents spawned inside a forked skill report spawnDepth 1 but
+        carry parentAgentId, so spawnDepth alone undercounts."""
+        if self.depth is not None:
+            return self.depth
         d = self.meta.get("spawnDepth")
         return d if isinstance(d, int) else 1
 
@@ -188,6 +200,23 @@ def _sidecar_name(side):
     return None
 
 
+def _resolve_depths(agents):
+    by_id = {a.agent_id: a for a in agents}
+    for a in agents:
+        chain, cur, seen = 1, a, set()
+        while True:
+            pid = cur.meta.get("parentAgentId")
+            if not pid or pid in seen or pid not in by_id:
+                if pid and pid not in by_id:
+                    chain += 1  # parent transcript missing; still one level up
+                break
+            seen.add(pid)
+            chain += 1
+            cur = by_id[pid]
+        sd = a.meta.get("spawnDepth")
+        a.depth = max(chain, sd if isinstance(sd, int) else 1)
+
+
 def _agent_files_under(subagents_dir):
     """(path, agent_id, workflow_run_id) for every agent-*.jsonl at any depth."""
     out = []
@@ -238,8 +267,13 @@ def discover_project(project_dir):
             for side in sides:
                 s.workflow_sidecars[side.stem] = read_json(side)
     for path, aid in legacy_agents:
-        sid = _first_session_id(path) or path.stem
+        sid = _first_session_id(path)
+        if sid is None:
+            sys.stderr.write("transcripts: %s has no sessionId; not attached to any session\n" % path)
+            continue
         get(sid).agents.append(AgentFile(path, aid, {}, None))
+    for s in sessions.values():
+        _resolve_depths(s.agents)
     return sessions
 
 
@@ -256,6 +290,9 @@ def discover(projects_dir, project_dirs=None):
                 o = out[sid]
                 if o.main is None:
                     o.main = s.main
+                elif s.main is not None:
+                    sys.stderr.write("transcripts: session %s has a main transcript under two "
+                                     "project dirs; using %s, ignoring %s\n" % (sid, o.main, s.main))
                 o.agents.extend(s.agents)
                 o.workflow_sidecars.update(s.workflow_sidecars)
             else:
@@ -276,16 +313,35 @@ def _content_text(content):
     return ""
 
 
+def is_tool_result(entry):
+    """True for a user entry that feeds tool output back (main thread or agent)."""
+    if entry.get("type") != "user":
+        return False
+    if "toolUseResult" in entry:
+        return True
+    msg = entry.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    return isinstance(content, list) and any(
+        isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+
+
+def strip_reminders(text):
+    """Remove <system-reminder> blocks the harness prepends to typed text."""
+    return REMINDER_BLOCK_RE.sub("", text or "")
+
+
 def user_entry_kind(entry):
     """Who authored a type=user transcript entry.
 
     Returns one of:
       human              typed by the person (interactive)
       sdk                prompt sent programmatically (claude -p, Agent SDK)
-      command            slash command invocation (<command-name>...); the
-                         <command-args> text, if any, is the person's
+      command            slash command invocation (<command-name>..., or a bare
+                         "/cmd args" with no origin metadata); the args text,
+                         if any, is the person's
       interrupt          "[Request interrupted ..." marker
-      tool_result        tool output fed back to the model
+      tool_result        tool output fed back to the model (checked first, so
+                         agent transcripts report it too)
       task_notification  background task / subagent completion notice
       peer               message or hand-back from another agent/session
       sidechain          entry inside a subagent transcript
@@ -298,14 +354,11 @@ def user_entry_kind(entry):
     msg = entry.get("message")
     if not isinstance(msg, dict) or msg.get("role", "user") != "user":
         return "not_user"
+    if is_tool_result(entry):
+        return "tool_result"
     if entry.get("isSidechain"):
         return "sidechain"
     content = msg.get("content")
-    if isinstance(content, list) and any(
-            isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
-        return "tool_result"
-    if "toolUseResult" in entry:
-        return "tool_result"
 
     origin = entry.get("origin")
     okind = origin.get("kind") if isinstance(origin, dict) else None
@@ -317,7 +370,7 @@ def user_entry_kind(entry):
     if entry.get("isCompactSummary") or entry.get("isMeta") or entry.get("isVisibleInTranscriptOnly"):
         return "meta"
 
-    text = _content_text(content).lstrip()
+    text = strip_reminders(_content_text(content)).lstrip()
     if not text.strip():
         return "meta"
     if text.startswith(INTERRUPT_PREFIX):
@@ -332,6 +385,10 @@ def user_entry_kind(entry):
     # only turnOrigin distinguishes a programmatic prompt.
     if turn_origin == "sdk":
         return "sdk"
+    if okind is None and turn_origin is None and BARE_COMMAND_RE.match(text):
+        # current interactive prompts carry origin metadata; a bare "/cmd"
+        # without it is a local command (headless run or older version)
+        return "command"
     return "human"
 
 

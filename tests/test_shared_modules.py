@@ -4,6 +4,7 @@ Run: python3 -m unittest discover -s tests -v
 """
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -58,6 +59,43 @@ class SharedTranscriptsModule(unittest.TestCase):
             self.assertEqual(kinds.get("task_notification"), 1)
             self.assertEqual(kinds.get("meta"), 2)
             self.assertEqual(t.workflow_run_ids_in("runId: wf_k3j9x2ab done"), ["wf_k3j9x2ab"])
+
+    def test_entry_kinds_edge_cases(self):
+        t = load(COPIES[0])
+        def u(content, **kw):
+            e = {"type": "user", "message": {"role": "user", "content": content}}
+            e.update(kw)
+            return e
+        tr = [{"type": "tool_result", "tool_use_id": "x", "content": "ok"}]
+        self.assertEqual(t.user_entry_kind(u(tr, isSidechain=True)), "tool_result")
+        self.assertEqual(t.user_entry_kind(u("hi", isSidechain=True)), "sidechain")
+        typed = u([{"type": "text", "text": "<system-reminder>ctx</system-reminder>\nFix the bug"}],
+                  origin={"kind": "human"})
+        self.assertEqual(t.user_entry_kind(typed), "human")
+        self.assertEqual(t.user_entry_kind(u("/skill-issue:skill-issue all")), "command")
+        self.assertEqual(t.user_entry_kind(u("/tmp/x is full", origin={"kind": "human"})), "human")
+        self.assertEqual(t.user_entry_kind(u("x", turnOrigin="sdk")), "sdk")
+
+    def test_depth_from_parent_chain_and_orphan_legacy_file(self):
+        t = load(COPIES[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = Path(tmp) / "-p"
+            sub = proj / "s1" / "subagents"
+            sub.mkdir(parents=True)
+            (proj / "s1.jsonl").write_text("")
+            for aid, meta in (("fork", {"agentType": "general-purpose", "spawnDepth": 1}),
+                              ("child", {"agentType": "x", "spawnDepth": 1, "parentAgentId": "fork"}),
+                              ("grand", {"agentType": "y", "spawnDepth": 1, "parentAgentId": "child"})):
+                (sub / ("agent-%s.jsonl" % aid)).write_text("{}\n")
+                (sub / ("agent-%s.meta.json" % aid)).write_text(json.dumps(meta))
+            (proj / "agent-orphan.jsonl").write_text('{"type": "user"}\n')
+            import contextlib, io
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                sessions = t.discover(tmp)
+            self.assertEqual(sorted(sessions), ["s1"])
+            self.assertIn("agent-orphan.jsonl", err.getvalue())
+            depth = {a.agent_id: a.spawn_depth for a in sessions["s1"].agents}
+            self.assertEqual(depth, {"fork": 1, "child": 2, "grand": 3})
 
 
 if __name__ == "__main__":
