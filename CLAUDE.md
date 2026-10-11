@@ -51,6 +51,7 @@ README.md                           ← marketplace-level docs
 - Scripts that read `~/.claude` take an override flag (e.g. `--projects-dir`) so tests can point them at fixtures
 - Write temp/output files under the run or output directory, never fixed `/tmp/...` paths (concurrent runs collide)
 - Never pass `$ARGUMENTS` straight into a shell command; parse against an allowlist first
+- Scripts that read transcripts use the vendored `transcripts.py` (byte-identical copies in each plugin; `tests/test_shared_modules.py` fails on drift). A session is its main `<sid>.jsonl` plus every `<sid>/subagents/**/agent-*.jsonl` (Agent/Task subagents, nested spawns, workflow agents under `subagents/workflows/<run-id>/`). Never treat an `agent-*.jsonl` file as a session, and classify user entries with `user_entry_kind()` — task notifications and subagent hand-backs are not user prompts
 
 ### Agents
 - Agents go in `agents/` at the plugin root
@@ -68,6 +69,7 @@ README.md                           ← marketplace-level docs
    ```bash
    python3 -m unittest discover -s plugins/<plugin>/tests -v
    ```
+   Repo-level tests (vendored modules, shared fixtures such as `tests/fixtures/make_delegation_fixture.py` for subagent/workflow transcripts): `python3 -m unittest discover -s tests -v`.
    Every script change needs a test against fixtures. Simulating a skill in a subagent checks the prose, not the behaviour — it does not catch shell bugs such as unexpanded `--include="*.{js,ts}"` globs.
 
 2. **Smoke-run the real skill headlessly** (this exercises frontmatter, substitutions and forking):
